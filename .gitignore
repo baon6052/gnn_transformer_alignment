@@ -1,3 +1,6 @@
 **__pycache__**
 .idea
 .vscode
+clrs_dataset
+.DS_Store
+dataset
