@@ -12,16 +12,16 @@ BIG_NUMBER = 1e6
 
 class Basic_MPNN(hk.Module):
     def __init__(
-            self,
-            nb_layers: int,
-            out_size: int,
-            mid_size: Optional[int] = None,
-            mid_act: Optional[_Fn] = None,
-            activation: Optional[_Fn] = jax.nn.relu,
-            reduction: _Fn = jnp.max,
-            msgs_mlp_sizes: Optional[List[int]] = None,
-            use_ln: bool = False,
-            name: str = 'mpnn_mp',
+        self,
+        nb_layers: int,
+        out_size: int,
+        mid_size: Optional[int] = None,
+        mid_act: Optional[_Fn] = None,
+        activation: Optional[_Fn] = jax.nn.relu,
+        reduction: _Fn = jnp.max,
+        msgs_mlp_sizes: Optional[List[int]] = None,
+        use_ln: bool = False,
+        name: str = "mpnn_mp",
     ):
         super().__init__(name=name)
         self.nb_layers = nb_layers
@@ -37,14 +37,13 @@ class Basic_MPNN(hk.Module):
         self.use_ln = use_ln
 
     def __call__(
-            self,
-            node_fts: _Array,
-            edge_fts: _Array,
-            graph_fts: _Array,
-            adj_mat: _Array,
-            hidden: _Array,
+        self,
+        node_fts: _Array,
+        edge_fts: _Array,
+        graph_fts: _Array,
+        adj_mat: _Array,
+        hidden: _Array,
     ) -> _Array:
-
         node_tensors = node_fts
         edge_tensors = edge_fts
         graph_tensors = graph_fts
@@ -63,8 +62,11 @@ class Basic_MPNN(hk.Module):
         msg_g = m_g(graph_tensors)
 
         msgs = (
-                jnp.expand_dims(msg_1, axis=1) + jnp.expand_dims(msg_2, axis=2) +
-                msg_e + jnp.expand_dims(msg_g, axis=(1, 2)))
+            jnp.expand_dims(msg_1, axis=1)
+            + jnp.expand_dims(msg_2, axis=2)
+            + msg_e
+            + jnp.expand_dims(msg_g, axis=(1, 2))
+        )
         if self._msgs_mlp_sizes is not None:
             msgs = hk.nets.MLP(self._msgs_mlp_sizes)(jax.nn.relu(msgs))
 
@@ -75,9 +77,7 @@ class Basic_MPNN(hk.Module):
             msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
             msgs = msgs / jnp.sum(adj_mat, axis=-1, keepdims=True)
         elif self.reduction == jnp.max:
-            maxarg = jnp.where(jnp.expand_dims(adj_mat, -1),
-                               msgs,
-                               -BIG_NUMBER)
+            maxarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, -BIG_NUMBER)
             msgs = jnp.max(maxarg, axis=1)
         else:
             msgs = self.reduction(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
