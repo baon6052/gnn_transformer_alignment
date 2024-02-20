@@ -1,26 +1,28 @@
-from typing import Tuple
+from enum import StrEnum, auto
 
 import haiku as hk
 import jax
 import jax.numpy as jnp
 import optax
 
-from dataset import data_loader
+from checkpointer import Checkpointer
+from dataset import DatasetPath, dataloader
 from models.mpnn import Basic_MPNN
 
-# Assuming you have a dataset ready
-# X_train, y_train, X_val, y_val = your_dataset_loader()
-dataset_loader = data_loader("dataset")
+
+class ValidationMode(StrEnum):
+    VALIDATION = auto()
+    TEST = auto()
+
+
+train_dataloader = dataloader(DatasetPath.TRAIN_PATH)
 (
     node_features,
     edge_features,
     graph_features,
     adjacency_matrix,
     hidden_node_features,
-), out_node_features = next(dataset_loader)
-
-# Assuming the dataset path is 'dataset', replace with the actual path
-dataset_path = "dataset"
+), out_node_features = next(train_dataloader)
 
 
 def model_fn(node_fts, edge_fts, graph_fts, adj_mat, hidden):
@@ -34,21 +36,10 @@ def model_fn(node_fts, edge_fts, graph_fts, adj_mat, hidden):
     return model(node_fts, edge_fts, graph_fts, adj_mat, hidden)
 
 
-# Transform the model function to a Haiku model
 model = hk.without_apply_rng(hk.transform(model_fn))
 
 
-# Example loss function (modify as needed)
-def loss_fn(params, batch):
-    (node_fts, edge_fts, graph_fts, adj_mat, hidden), targets = batch
-    predictions = model.apply(
-        params, node_fts, edge_fts, graph_fts, adj_mat, hidden
-    )
-    return jnp.mean(optax.l2_loss(predictions, targets))
-
-
-# Initialize parameters
-params = model.init(
+parameters = model.init(
     jax.random.PRNGKey(42),
     node_fts=node_features,
     edge_fts=edge_features,
@@ -57,34 +48,83 @@ params = model.init(
     hidden=hidden_node_features,
 )
 
-# Define optimizer
-optimizer = optax.adam(1e-3)
-opt_state = optimizer.init(params)
+optimizer = optax.adam(0.001)
+optimizer_state = optimizer.init(parameters)
 
 
-# Training step
+def loss_function(parameters, batch):
+    (
+        node_fts,
+        edge_fts,
+        graph_fts,
+        adj_mat,
+        hidden,
+    ), transformer_embedding = batch
+    mpnn_embedding = model.apply(
+        parameters, node_fts, edge_fts, graph_fts, adj_mat, hidden
+    )
+    return jnp.mean(optax.l2_loss(mpnn_embedding, transformer_embedding))
+
+
 @jax.jit
-def train_step(params, opt_state, batch):
-    loss, grads = jax.value_and_grad(loss_fn)(params, batch)
-    updates, opt_state = optimizer.update(grads, opt_state)
-    new_params = optax.apply_updates(params, updates)
-    return new_params, opt_state, loss
+def train_step(parameters, optimizer_state, batch):
+    loss, grads = jax.value_and_grad(loss_function)(parameters, batch)
+    updates, optimizer_state = optimizer.update(grads, optimizer_state)
+    new_parameters = optax.apply_updates(parameters, updates)
+    return new_parameters, optimizer_state, loss
 
 
-# Training loop
-def train(model, params, opt_state, epochs=10):
-    dataset_path = "dataset"
+def train_model(parameters, optimizer_state, epochs=50):
     for epoch in range(epochs):
-        for batch in data_loader(dataset_path):
+        total_loss = 0
+        num_batches = 0
+
+        for batch in dataloader(DatasetPath.TRAIN_PATH):
             inputs, targets = batch[:-1], batch[-1]
             batch = (
                 *inputs,
                 targets,
-            )  # Combine inputs and targets in the required format
-            params, opt_state, loss = train_step(params, opt_state, batch)
-        # Validation logic here
+            )
+            parameters, optimizer_state, loss = train_step(
+                parameters, optimizer_state, batch
+            )
+            total_loss += loss
+            num_batches += 1
+
+        loss = total_loss / num_batches
         print(f"Epoch {epoch}, Loss: {loss}")
 
+        validate_model(parameters, ValidationMode.VALIDATION)
 
-# Example usage
-train(model, params, opt_state)
+    checkpointer = Checkpointer("./trained_models/mpnn.pkl")
+    checkpointer.save(parameters)
+
+    return parameters
+
+
+def validate_model(parameters, mode: ValidationMode):
+    loss = 0
+    num_batches = 0
+
+    dataset_path = (
+        DatasetPath.VALIDATION_PATH
+        if mode == ValidationMode.VALIDATION
+        else DatasetPath.TEST_PATH
+    )
+
+    for batch in dataloader(dataset_path):
+        inputs, targets = batch[:-1], batch[-1]
+        batch = (
+            *inputs,
+            targets,
+        )
+        loss += loss_function(parameters, batch)
+        num_batches += 1
+
+    average_loss = loss / num_batches
+    print(f"{mode} Loss: {average_loss}")
+
+
+if __name__ == "__main__":
+    parameters = train_model(parameters, optimizer_state)
+    validate_model(parameters, ValidationMode.TEST)
