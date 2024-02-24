@@ -5,9 +5,12 @@ import jax
 import jax.numpy as jnp
 import optax
 
+import wandb
 from checkpointer import Checkpointer
 from dataset import DatasetPath, dataloader
-from models.mpnn import Basic_MPNN
+from models.mpnn import AlignedMPNN
+
+run = wandb.init(project="gnn_alignment", entity="monoids")
 
 
 class ValidationMode(StrEnum):
@@ -17,21 +20,26 @@ class ValidationMode(StrEnum):
 
 train_dataloader = dataloader(DatasetPath.TRAIN_PATH)
 (
-    node_features,
-    edge_features,
-    graph_features,
-    adjacency_matrix,
-    hidden_node_features,
-), out_node_features = next(train_dataloader)
+    (
+        input_node_features,
+        input_edge_features,
+        input_graph_features,
+        input_adjacency_matrix,
+        input_hidden_node_features,
+    ),
+    transformer_node_features_all_layers,
+    transformer_edge_embedding,
+) = next(train_dataloader)
 
 
 def model_fn(node_fts, edge_fts, graph_fts, adj_mat, hidden):
-    model = Basic_MPNN(
+    model = AlignedMPNN(
         nb_layers=3,
         out_size=192,
-        mid_size=64,
+        mid_size=192,
         activation=jax.nn.relu,
         reduction=jnp.max,
+        num_layers=3,
     )
     return model(node_fts, edge_fts, graph_fts, adj_mat, hidden)
 
@@ -41,34 +49,58 @@ model = hk.without_apply_rng(hk.transform(model_fn))
 
 parameters = model.init(
     jax.random.PRNGKey(42),
-    node_fts=node_features,
-    edge_fts=edge_features,
-    graph_fts=graph_features,
-    adj_mat=adjacency_matrix,
-    hidden=hidden_node_features,
+    node_fts=input_node_features,
+    edge_fts=input_edge_features,
+    graph_fts=input_graph_features,
+    adj_mat=input_adjacency_matrix,
+    hidden=input_hidden_node_features,
 )
 
 optimizer = optax.adam(0.001)
 optimizer_state = optimizer.init(parameters)
 
 
-def loss_function(parameters, batch):
+def l2_loss_function(parameters, batch):
     (
-        node_fts,
-        edge_fts,
-        graph_fts,
-        adj_mat,
-        hidden,
-    ), transformer_embedding = batch
-    mpnn_embedding = model.apply(
-        parameters, node_fts, edge_fts, graph_fts, adj_mat, hidden
+        (
+            input_node_fts,
+            input_edge_fts,
+            input_graph_fts,
+            input_adj_mat,
+            input_hidden,
+        ),
+        transformer_node_features_all_layers,
+        transformer_edge_embedding,
+    ) = batch
+
+    mpnn_node_features_all_layers, mpnn_edge_embeddings = model.apply(
+        parameters,
+        input_node_fts,
+        input_edge_fts,
+        input_graph_fts,
+        input_adj_mat,
+        input_hidden,
     )
-    return jnp.mean(optax.l2_loss(mpnn_embedding, transformer_embedding))
+
+    loss = jnp.mean(
+        optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding)
+    )
+
+    for mpnn_node_embedding, transformer_node_embedding in zip(
+        mpnn_node_features_all_layers,
+        transformer_node_features_all_layers,
+        strict=True,
+    ):
+        loss += jnp.mean(
+            optax.l2_loss(mpnn_node_embedding, transformer_node_embedding)
+        )
+
+    return loss
 
 
 @jax.jit
 def train_step(parameters, optimizer_state, batch):
-    loss, grads = jax.value_and_grad(loss_function)(parameters, batch)
+    loss, grads = jax.value_and_grad(l2_loss_function)(parameters, batch)
     updates, optimizer_state = optimizer.update(grads, optimizer_state)
     new_parameters = optax.apply_updates(parameters, updates)
     return new_parameters, optimizer_state, loss
@@ -91,10 +123,17 @@ def train_model(parameters, optimizer_state, epochs=50):
             total_loss += loss
             num_batches += 1
 
-        loss = total_loss / num_batches
+        train_loss = total_loss / num_batches
         print(f"Epoch {epoch}, Loss: {loss}")
 
-        validate_model(parameters, ValidationMode.VALIDATION)
+        validation_loss = validate_model(parameters, ValidationMode.VALIDATION)
+
+        wandb.log(
+            {
+                "train_loss": train_loss.item(),
+                "validation_loss": validation_loss.item(),
+            }
+        )
 
     checkpointer = Checkpointer("./trained_models/mpnn.pkl")
     checkpointer.save(parameters)
@@ -118,13 +157,17 @@ def validate_model(parameters, mode: ValidationMode):
             *inputs,
             targets,
         )
-        loss += loss_function(parameters, batch)
+        loss += l2_loss_function(parameters, batch)
         num_batches += 1
 
     average_loss = loss / num_batches
     print(f"{mode} Loss: {average_loss}")
 
+    return average_loss
+
 
 if __name__ == "__main__":
     parameters = train_model(parameters, optimizer_state)
-    validate_model(parameters, ValidationMode.TEST)
+    test_loss = validate_model(parameters, ValidationMode.TEST)
+
+    wandb.log({"test_loss": test_loss})

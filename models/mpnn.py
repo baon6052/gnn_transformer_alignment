@@ -1,3 +1,4 @@
+from copy import deepcopy
 from typing import Any, Callable, List, Optional
 
 import chex
@@ -10,7 +11,7 @@ _Fn = Callable[..., Any]
 BIG_NUMBER = 1e6
 
 
-class Basic_MPNN(hk.Module):
+class MPNNLayer(hk.Module):
     def __init__(
         self,
         nb_layers: int,
@@ -94,4 +95,67 @@ class Basic_MPNN(hk.Module):
             ln = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
             ret = ln(ret)
 
-        return ret
+        return ret, msg_e
+
+
+class AlignedMPNN(hk.Module):
+    def __init__(
+        self,
+        nb_layers: int,
+        out_size: int,
+        mid_size: Optional[int] = None,
+        mid_act: Optional[_Fn] = None,
+        activation: Optional[_Fn] = jax.nn.relu,
+        reduction: _Fn = jnp.max,
+        msgs_mlp_sizes: Optional[List[int]] = None,
+        use_ln: bool = False,
+        name: str = "mpnn_mp",
+        num_layers: int = 3,
+    ):
+        super().__init__(name=name)
+        self.nb_layers = nb_layers
+        if mid_size is None:
+            self.mid_size = out_size
+        else:
+            self.mid_size = mid_size
+        self.out_size = out_size
+        self.mid_act = mid_act
+        self.activation = activation
+        self.reduction = reduction
+        self._msgs_mlp_sizes = msgs_mlp_sizes
+        self.use_ln = use_ln
+
+    def __call__(
+        self,
+        node_fts: _Array,
+        edge_fts: _Array,
+        graph_fts: _Array,
+        adj_mat: _Array,
+        hidden: _Array,
+        num_layers: int = 3,
+    ) -> tuple[list[_Array], _Array]:
+        node_tensors = node_fts
+        edge_tensors = edge_fts
+        graph_tensors = graph_fts
+
+        layers = []
+        node_features_all_layers = []
+
+        for _ in range(num_layers):
+            layers.append(
+                MPNNLayer(
+                    nb_layers=self.nb_layers,
+                    out_size=self.out_size,
+                    mid_size=self.mid_size,
+                    activation=self.activation,
+                    reduction=self.reduction,
+                )
+            )
+
+        for layer in layers:
+            node_tensors, edge_tensors = layer(
+                node_tensors, edge_tensors, graph_tensors, adj_mat, hidden
+            )
+            node_features_all_layers.append(deepcopy(node_tensors))
+
+        return node_features_all_layers, edge_tensors

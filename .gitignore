@@ -4,3 +4,5 @@
 clrs_dataset
 .DS_Store
 dataset
+wandb/
+trained_models/
