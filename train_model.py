@@ -9,8 +9,11 @@ import wandb
 from checkpointer import Checkpointer
 from dataset import DatasetPath, dataloader
 from models.mpnn import AlignedMPNN
+from pathlib import Path
 
 run = wandb.init(project="gnn_alignment", entity="monoids")
+MODEL_DIR = Path(Path.cwd(), "trained_models")
+MODEL_DIR.mkdir(exist_ok=True, parents=True)
 
 
 class ValidationMode(StrEnum):
@@ -82,18 +85,14 @@ def l2_loss_function(parameters, batch):
         input_hidden,
     )
 
-    loss = jnp.mean(
-        optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding)
-    )
+    loss = jnp.mean(optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding))
 
     for mpnn_node_embedding, transformer_node_embedding in zip(
         mpnn_node_features_all_layers,
         transformer_node_features_all_layers,
         strict=True,
     ):
-        loss += jnp.mean(
-            optax.l2_loss(mpnn_node_embedding, transformer_node_embedding)
-        )
+        loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
 
     return loss
 
@@ -139,7 +138,7 @@ def train_model(parameters, optimizer_state, epochs=50):
 
         if validation_loss < best_validation_loss:
             best_validation_loss = validation_loss
-            checkpointer = Checkpointer("./trained_models/mpnn.pkl")
+            checkpointer = Checkpointer(f"{MODEL_DIR}/mpnn.pkl")
             checkpointer.save(parameters)
 
     return parameters
