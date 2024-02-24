@@ -107,6 +107,8 @@ def train_step(parameters, optimizer_state, batch):
 
 
 def train_model(parameters, optimizer_state, epochs=50):
+    best_validation_loss = float("inf")
+
     for epoch in range(epochs):
         total_loss = 0
         num_batches = 0
@@ -135,8 +137,10 @@ def train_model(parameters, optimizer_state, epochs=50):
             }
         )
 
-    checkpointer = Checkpointer("./trained_models/mpnn.pkl")
-    checkpointer.save(parameters)
+        if validation_loss < best_validation_loss:
+            best_validation_loss = validation_loss
+            checkpointer = Checkpointer("./trained_models/mpnn.pkl")
+            checkpointer.save(parameters)
 
     return parameters
 
