@@ -40,7 +40,7 @@ def model_fn(node_fts, edge_fts, graph_fts, adj_mat, hidden):
         nb_layers=3,
         out_size=192,
         mid_size=192,
-        activation=jax.nn.relu,
+        activation=None,
         reduction=jnp.max,
         num_layers=3,
     )
@@ -87,12 +87,18 @@ def l2_loss_function(parameters, batch):
 
     loss = jnp.mean(optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding))
 
-    for mpnn_node_embedding, transformer_node_embedding in zip(
-        mpnn_node_features_all_layers,
-        transformer_node_features_all_layers,
-        strict=True,
-    ):
-        loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
+    # for mpnn_node_embedding, transformer_node_embedding in zip(
+    #     mpnn_node_features_all_layers,
+    #     transformer_node_features_all_layers,
+    #     strict=True,
+    # ):
+    #     loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
+
+    loss += jnp.mean(  # NB +
+        optax.l2_loss(
+            mpnn_node_features_all_layers[-1], transformer_node_features_all_layers[-1]
+        )
+    )
 
     return loss
 
@@ -125,7 +131,7 @@ def train_model(parameters, optimizer_state, epochs=50):
             num_batches += 1
 
         train_loss = total_loss / num_batches
-        print(f"Epoch {epoch}, Loss: {loss}")
+        print(f"Epoch {epoch}, Loss: {train_loss.item()}")
 
         validation_loss = validate_model(parameters, ValidationMode.VALIDATION)
 

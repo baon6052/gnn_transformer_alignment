@@ -6,3 +6,4 @@ clrs_dataset
 dataset
 wandb/
 trained_models/
+**.ipynb_checkpoints**
