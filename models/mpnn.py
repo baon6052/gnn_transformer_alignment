@@ -44,6 +44,7 @@ class MPNNLayer(hk.Module):
         graph_fts: _Array,
         adj_mat: _Array,
         hidden: _Array,
+        edge_em: _Array,
     ) -> _Array:
         node_tensors = node_fts
         edge_tensors = edge_fts
@@ -132,10 +133,11 @@ class AlignedMPNN(hk.Module):
         graph_fts: _Array,
         adj_mat: _Array,
         hidden: _Array,
+        edge_em: _Array,
         num_layers: int = 3,
     ) -> tuple[list[_Array], _Array]:
-        node_tensors = node_fts
-        edge_tensors = edge_fts
+        node_tensors = jnp.concatenate([node_fts, hidden], axis=-1)
+        edge_tensors = jnp.concatenate([edge_fts, edge_em], axis=-1)
         graph_tensors = graph_fts
 
         # VIRTUAL NODE
@@ -145,13 +147,20 @@ class AlignedMPNN(hk.Module):
         virtual_node_features = jnp.zeros(
             (node_tensors.shape[0], 1, node_tensors.shape[-1])
         )
-        node_tensors = jnp.concatenate([node_tensors, virtual_node_features], axis=1)
+        node_tensors = jnp.concatenate(
+            [node_tensors, virtual_node_features], axis=1
+        )
 
         # EDGE FEATURES
         # add features of 0
         # column
         virtual_node_edge_features_col = jnp.zeros(
-            (edge_tensors.shape[0], edge_tensors.shape[1], 1, edge_tensors.shape[-1])
+            (
+                edge_tensors.shape[0],
+                edge_tensors.shape[1],
+                1,
+                edge_tensors.shape[-1],
+            )
         )
         edge_tensors = jnp.concatenate(
             [edge_tensors, virtual_node_edge_features_col], axis=2
@@ -172,9 +181,13 @@ class AlignedMPNN(hk.Module):
 
         # ADJ MATRIX
         # add connection between VN and all other nodes
-        virtual_node_adj_mat_row = jnp.ones((adj_mat.shape[0], 1, adj_mat.shape[-1]))
+        virtual_node_adj_mat_row = jnp.ones(
+            (adj_mat.shape[0], 1, adj_mat.shape[-1])
+        )
         adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_row], axis=1)
-        virtual_node_adj_mat_col = jnp.ones((adj_mat.shape[0], adj_mat.shape[1], 1))
+        virtual_node_adj_mat_col = jnp.ones(
+            (adj_mat.shape[0], adj_mat.shape[1], 1)
+        )
         adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_col], axis=2)
 
         layers = []
@@ -193,7 +206,12 @@ class AlignedMPNN(hk.Module):
 
         for layer in layers:
             node_tensors, edge_tensors = layer(
-                node_tensors, edge_tensors, graph_tensors, adj_mat, hidden
+                node_tensors,
+                edge_tensors,
+                graph_tensors,
+                adj_mat,
+                hidden,
+                edge_em,
             )
             node_features_all_layers.append(
                 deepcopy(node_tensors[:, : node_tensors.shape[1] - 1, :])

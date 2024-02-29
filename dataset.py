@@ -26,6 +26,9 @@ def load_batch(batch_path: str):
     input_hidden_node_features = np.load(
         os.path.join(batch_path, "input_hidden_node_features.npy")
     )
+    input_hidden_edge_features = np.load(
+        os.path.join(batch_path, "input_hidden_edge_features.npy")
+    )
 
     node_features_all_layers = []
 
@@ -46,6 +49,7 @@ def load_batch(batch_path: str):
             input_graph_features,
             input_adjacency_matrix,
             input_hidden_node_features,
+            input_hidden_edge_features,
         ),
         node_features_all_layers,
         out_edge_features,

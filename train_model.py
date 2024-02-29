@@ -1,4 +1,5 @@
 from enum import StrEnum, auto
+from pathlib import Path
 
 import haiku as hk
 import jax
@@ -9,7 +10,6 @@ import wandb
 from checkpointer import Checkpointer
 from dataset import DatasetPath, dataloader
 from models.mpnn import AlignedMPNN
-from pathlib import Path
 
 run = wandb.init(project="gnn_alignment", entity="monoids")
 MODEL_DIR = Path(Path.cwd(), "trained_models")
@@ -29,13 +29,14 @@ train_dataloader = dataloader(DatasetPath.TRAIN_PATH)
         input_graph_features,
         input_adjacency_matrix,
         input_hidden_node_features,
+        input_hidden_edge_features,
     ),
     transformer_node_features_all_layers,
     transformer_edge_embedding,
 ) = next(train_dataloader)
 
 
-def model_fn(node_fts, edge_fts, graph_fts, adj_mat, hidden):
+def model_fn(node_fts, edge_fts, graph_fts, adj_mat, hidden, edge_em):
     model = AlignedMPNN(
         nb_layers=3,
         out_size=192,
@@ -44,7 +45,7 @@ def model_fn(node_fts, edge_fts, graph_fts, adj_mat, hidden):
         reduction=jnp.max,
         num_layers=3,
     )
-    return model(node_fts, edge_fts, graph_fts, adj_mat, hidden)
+    return model(node_fts, edge_fts, graph_fts, adj_mat, hidden, edge_em)
 
 
 model = hk.without_apply_rng(hk.transform(model_fn))
@@ -57,6 +58,7 @@ parameters = model.init(
     graph_fts=input_graph_features,
     adj_mat=input_adjacency_matrix,
     hidden=input_hidden_node_features,
+    edge_em=input_hidden_edge_features,
 )
 
 optimizer = optax.adam(0.001)
@@ -71,6 +73,7 @@ def l2_loss_function(parameters, batch):
             input_graph_fts,
             input_adj_mat,
             input_hidden,
+            input_edge_em,
         ),
         transformer_node_features_all_layers,
         transformer_edge_embedding,
@@ -83,22 +86,21 @@ def l2_loss_function(parameters, batch):
         input_graph_fts,
         input_adj_mat,
         input_hidden,
+        input_edge_em,
     )
 
-    loss = jnp.mean(optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding))
+    loss = jnp.mean(
+        optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding)
+    )
 
-    # for mpnn_node_embedding, transformer_node_embedding in zip(
-    #     mpnn_node_features_all_layers,
-    #     transformer_node_features_all_layers,
-    #     strict=True,
-    # ):
-    #     loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
-
-    loss += jnp.mean(  # NB +
-        optax.l2_loss(
-            mpnn_node_features_all_layers[-1], transformer_node_features_all_layers[-1]
+    for mpnn_node_embedding, transformer_node_embedding in zip(
+        mpnn_node_features_all_layers,
+        transformer_node_features_all_layers,
+        strict=True,
+    ):
+        loss += jnp.mean(
+            optax.l2_loss(mpnn_node_embedding, transformer_node_embedding)
         )
-    )
 
     return loss
 
@@ -111,7 +113,10 @@ def train_step(parameters, optimizer_state, batch):
     return new_parameters, optimizer_state, loss
 
 
-def train_model(parameters, optimizer_state, epochs=50):
+checkpointer = Checkpointer(f"{MODEL_DIR}/mpnn.pkl")
+
+
+def train_model(parameters, optimizer_state, epochs=100):
     best_validation_loss = float("inf")
 
     for epoch in range(epochs):
@@ -144,7 +149,6 @@ def train_model(parameters, optimizer_state, epochs=50):
 
         if validation_loss < best_validation_loss:
             best_validation_loss = validation_loss
-            checkpointer = Checkpointer(f"{MODEL_DIR}/mpnn.pkl")
             checkpointer.save(parameters)
 
     return parameters
