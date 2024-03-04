@@ -110,8 +110,8 @@ class AlignedMPNN(hk.Module):
         reduction: _Fn = jnp.mean,
         msgs_mlp_sizes: Optional[List[int]] = None,
         use_ln: bool = False,
+        add_virtual_node: bool = True,
         name: str = "mpnn_mp",
-        num_layers: int = 3,
     ):
         super().__init__(name=name)
         self.nb_layers = nb_layers
@@ -125,6 +125,7 @@ class AlignedMPNN(hk.Module):
         self.reduction = reduction
         self._msgs_mlp_sizes = msgs_mlp_sizes
         self.use_ln = use_ln
+        self.add_virtual_node = add_virtual_node
 
     def __call__(
         self,
@@ -140,55 +141,58 @@ class AlignedMPNN(hk.Module):
         edge_tensors = jnp.concatenate([edge_fts, edge_em], axis=-1)
         graph_tensors = graph_fts
 
-        # VIRTUAL NODE
-
-        # NODE FEATURES
-        # add features of 0
-        virtual_node_features = jnp.zeros(
-            (node_tensors.shape[0], 1, node_tensors.shape[-1])
-        )
-        node_tensors = jnp.concatenate(
-            [node_tensors, virtual_node_features], axis=1
-        )
-
-        # EDGE FEATURES
-        # add features of 0
-        # column
-        virtual_node_edge_features_col = jnp.zeros(
-            (
-                edge_tensors.shape[0],
-                edge_tensors.shape[1],
-                1,
-                edge_tensors.shape[-1],
+        if self.add_virtual_node:
+            # NODE FEATURES
+            # add features of 0
+            virtual_node_features = jnp.zeros(
+                (node_tensors.shape[0], 1, node_tensors.shape[-1])
             )
-        )
-        edge_tensors = jnp.concatenate(
-            [edge_tensors, virtual_node_edge_features_col], axis=2
-        )
-
-        # row
-        virtual_node_edge_features_row = jnp.zeros(
-            (
-                edge_tensors.shape[0],
-                1,
-                edge_tensors.shape[2],
-                edge_tensors.shape[-1],
+            node_tensors = jnp.concatenate(
+                [node_tensors, virtual_node_features], axis=1
             )
-        )
-        edge_tensors = jnp.concatenate(
-            [edge_tensors, virtual_node_edge_features_row], axis=1
-        )
 
-        # ADJ MATRIX
-        # add connection between VN and all other nodes
-        virtual_node_adj_mat_row = jnp.ones(
-            (adj_mat.shape[0], 1, adj_mat.shape[-1])
-        )
-        adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_row], axis=1)
-        virtual_node_adj_mat_col = jnp.ones(
-            (adj_mat.shape[0], adj_mat.shape[1], 1)
-        )
-        adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_col], axis=2)
+            # EDGE FEATURES
+            # add features of 0
+            # column
+            virtual_node_edge_features_col = jnp.zeros(
+                (
+                    edge_tensors.shape[0],
+                    edge_tensors.shape[1],
+                    1,
+                    edge_tensors.shape[-1],
+                )
+            )
+            edge_tensors = jnp.concatenate(
+                [edge_tensors, virtual_node_edge_features_col], axis=2
+            )
+
+            # Row
+            virtual_node_edge_features_row = jnp.zeros(
+                (
+                    edge_tensors.shape[0],
+                    1,
+                    edge_tensors.shape[2],
+                    edge_tensors.shape[-1],
+                )
+            )
+            edge_tensors = jnp.concatenate(
+                [edge_tensors, virtual_node_edge_features_row], axis=1
+            )
+
+            # ADJ MATRIX
+            # add connection between VN and all other nodes
+            virtual_node_adj_mat_row = jnp.ones(
+                (adj_mat.shape[0], 1, adj_mat.shape[-1])
+            )
+            adj_mat = jnp.concatenate(
+                [adj_mat, virtual_node_adj_mat_row], axis=1
+            )
+            virtual_node_adj_mat_col = jnp.ones(
+                (adj_mat.shape[0], adj_mat.shape[1], 1)
+            )
+            adj_mat = jnp.concatenate(
+                [adj_mat, virtual_node_adj_mat_col], axis=2
+            )
 
         layers = []
         node_features_all_layers = []
@@ -201,6 +205,7 @@ class AlignedMPNN(hk.Module):
                     mid_size=self.mid_size,
                     activation=self.activation,
                     reduction=self.reduction,
+                    use_ln=self.use_ln,
                 )
             )
 
@@ -213,13 +218,23 @@ class AlignedMPNN(hk.Module):
                 hidden,
                 edge_em,
             )
-            node_features_all_layers.append(
-                deepcopy(node_tensors[:, : node_tensors.shape[1] - 1, :])
+
+            if self.add_virtual_node:
+                node_features_all_layers.append(
+                    deepcopy(node_tensors[:, : node_tensors.shape[1] - 1, :])
+                )
+            else:
+                node_features_all_layers.append(deepcopy(node_tensors))
+
+        if self.add_virtual_node:
+            return (
+                node_features_all_layers,
+                edge_tensors[
+                    :,
+                    : edge_tensors.shape[1] - 1,
+                    : edge_tensors.shape[2] - 1,
+                    :,
+                ],
             )
 
-        return (
-            node_features_all_layers,
-            edge_tensors[
-                :, : edge_tensors.shape[1] - 1, : edge_tensors.shape[2] - 1, :
-            ],
-        )
+        return node_features_all_layers, edge_tensors

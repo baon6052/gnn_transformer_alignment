@@ -1,0 +1,43 @@
+program: train_model.py
+entity: monoids
+project: gnn_alignment
+
+name: experiments_1
+
+command:
+- ${env}
+- ${interpreter}
+- ${program}
+- ${args}
+
+method: grid
+parameters:
+
+  add_virtual_node:
+    distribution: categorical
+    values:
+      - true
+      - false
+
+  use_layer_norm:
+    distribution: categorical
+    values:
+      - true
+      - false
+
+  mid_dim:
+    distribution: categorical
+    values:
+    - 192
+    - 256
+    - 512
+    - 1024
+
+  reduction:
+    distribution: categorical
+    values:
+      - "mean"
+      - "sum"
+      - "max"
+
+

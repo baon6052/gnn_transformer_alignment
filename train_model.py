@@ -1,6 +1,7 @@
 from enum import StrEnum, auto
 from pathlib import Path
 
+import click
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -10,14 +11,6 @@ import wandb
 from checkpointer import Checkpointer
 from dataset import DatasetPath, dataloader
 from models.mpnn import AlignedMPNN
-
-run = wandb.init(
-    project="gnn_alignment",
-    entity="monoids",
-    name="vn_all_layers_and_edge_mean_reduction",
-    group="update_experiments",
-)
-
 
 MODEL_DIR = Path(Path.cwd(), "trained_models")
 MODEL_DIR.mkdir(exist_ok=True, parents=True)
@@ -42,34 +35,35 @@ train_dataloader = dataloader(DatasetPath.TRAIN_PATH)
     transformer_edge_embedding,
 ) = next(train_dataloader)
 
+model = None
+parameters = None
+optimizer = None
+optimizer_state = None
 
-def model_fn(node_fts, edge_fts, graph_fts, adj_mat, hidden, edge_em):
+
+def model_fn(
+    node_fts,
+    edge_fts,
+    graph_fts,
+    adj_mat,
+    hidden,
+    edge_em,
+    mid_size=192,
+    reduction_func=jnp.mean,
+    use_layer_norm: bool = True,
+    add_virtual_node: bool = True,
+):
     model = AlignedMPNN(
         nb_layers=3,
         out_size=192,
-        mid_size=192,
+        mid_size=mid_size,
         activation=None,
-        reduction=jnp.mean,
-        num_layers=3,
+        reduction=reduction_func,
+        use_ln=use_layer_norm,
+        add_virtual_node=add_virtual_node,
     )
+
     return model(node_fts, edge_fts, graph_fts, adj_mat, hidden, edge_em)
-
-
-model = hk.without_apply_rng(hk.transform(model_fn))
-
-
-parameters = model.init(
-    jax.random.PRNGKey(42),
-    node_fts=input_node_features,
-    edge_fts=input_edge_features,
-    graph_fts=input_graph_features,
-    adj_mat=input_adjacency_matrix,
-    hidden=input_hidden_node_features,
-    edge_em=input_hidden_edge_features,
-)
-
-optimizer = optax.adam(0.001)
-optimizer_state = optimizer.init(parameters)
 
 
 def l2_loss_function(parameters, batch):
@@ -100,19 +94,14 @@ def l2_loss_function(parameters, batch):
         optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding)
     )
 
-    # for mpnn_node_embedding, transformer_node_embedding in zip(
-    #     mpnn_node_features_all_layers,
-    #     transformer_node_features_all_layers,
-    #     strict=True,
-    # ):
-    #     loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
-
-    loss += jnp.mean(
-        optax.l2_loss(
-            mpnn_node_features_all_layers[-1],
-            transformer_node_features_all_layers[-1],
+    for mpnn_node_embedding, transformer_node_embedding in zip(
+        mpnn_node_features_all_layers,
+        transformer_node_features_all_layers,
+        strict=True,
+    ):
+        loss += jnp.mean(
+            optax.l2_loss(mpnn_node_embedding, transformer_node_embedding)
         )
-    )
 
     return loss
 
@@ -125,10 +114,9 @@ def train_step(parameters, optimizer_state, batch):
     return new_parameters, optimizer_state, loss
 
 
-checkpointer = Checkpointer(f"{MODEL_DIR}/0_mean_final_layers_edges.pkl")
-
-
-def train_model(parameters, optimizer_state, epochs=1000):
+def train_model(
+    parameters, optimizer_state, use_wandb, checkpointer, epochs=25
+):
     best_validation_loss = float("inf")
 
     for epoch in range(epochs):
@@ -154,13 +142,14 @@ def train_model(parameters, optimizer_state, epochs=1000):
 
         print(f"Epoch {epoch}, Loss: {train_loss.item()}")
 
-        wandb.log(
-            {
-                "train_loss": train_loss,
-                "validation_loss": validation_loss,
-                "test_loss": test_loss,
-            }
-        )
+        if use_wandb:
+            wandb.log(
+                {
+                    "train_loss": train_loss,
+                    "validation_loss": validation_loss,
+                    "test_loss": test_loss,
+                }
+            )
 
         if validation_loss < best_validation_loss:
             best_validation_loss = validation_loss
@@ -194,9 +183,80 @@ def validate_model(parameters, mode: ValidationMode):
     return average_loss
 
 
-if __name__ == "__main__":
-    parameters = train_model(parameters, optimizer_state)
+@click.command()
+@click.option("--use_layer_norm", type=bool, default=True)
+@click.option("--mid_dim", type=int, default=192)
+@click.option("--add_virtual_node", type=bool, default=True)
+@click.option("--reduction", type=str, default="mean")
+@click.option("--use_wandb", type=bool, default=False)
+def main(
+    use_layer_norm: bool,
+    mid_dim: int,
+    add_virtual_node: bool,
+    reduction: str,
+    use_wandb: bool,
+) -> None:
+    global model, parameters, optimizer, optimizer_state
+
+    model_save_name = f"vn_{add_virtual_node}_ln_{use_layer_norm}_mid_dim_{mid_dim}_reduction_{reduction}"
+    reduction_func = jnp.mean
+
+    if reduction == "sum":
+        reduction_func = jnp.sum
+    else:
+        reduction_func = jnp.max
+
+    def model_wrapper(node_fts, edge_fts, graph_fts, adj_mat, hidden, edge_em):
+        return model_fn(
+            node_fts,
+            edge_fts,
+            graph_fts,
+            adj_mat,
+            hidden,
+            edge_em,
+            mid_size=mid_dim,
+            reduction_func=reduction_func,
+            use_layer_norm=use_layer_norm,
+            add_virtual_node=add_virtual_node,
+        )
+
+    model = hk.without_apply_rng(hk.transform(model_wrapper))
+
+    parameters = model.init(
+        jax.random.PRNGKey(42),
+        node_fts=input_node_features,
+        edge_fts=input_edge_features,
+        graph_fts=input_graph_features,
+        adj_mat=input_adjacency_matrix,
+        hidden=input_hidden_node_features,
+        edge_em=input_hidden_edge_features,
+    )
+
+    optimizer = optax.adam(0.001)
+    optimizer_state = optimizer.init(parameters)
+
+    if use_wandb:
+        run = wandb.init(
+            project="gnn_alignment",
+            entity="monoids",
+            name=model_save_name,
+            group="experiment_1",
+        )
+
+    checkpointer = Checkpointer(f"{MODEL_DIR}/{model_save_name}.pkl")
+    parameters = train_model(
+        parameters,
+        optimizer_state,
+        use_wandb=use_wandb,
+        checkpointer=checkpointer,
+    )
+
     parameters = checkpointer.load()
     test_loss = validate_model(parameters, ValidationMode.TEST)
 
-    wandb.log({"test_loss": test_loss})
+    if use_wandb:
+        wandb.log({"test_loss": test_loss})
+
+
+if __name__ == "__main__":
+    main()
