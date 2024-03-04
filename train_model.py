@@ -11,7 +11,14 @@ from checkpointer import Checkpointer
 from dataset import DatasetPath, dataloader
 from models.mpnn import AlignedMPNN
 
-run = wandb.init(project="gnn_alignment", entity="monoids")
+run = wandb.init(
+    project="gnn_alignment",
+    entity="monoids",
+    name="vn_all_layers_and_edge_mean_reduction",
+    group="update_experiments",
+)
+
+
 MODEL_DIR = Path(Path.cwd(), "trained_models")
 MODEL_DIR.mkdir(exist_ok=True, parents=True)
 
@@ -42,7 +49,7 @@ def model_fn(node_fts, edge_fts, graph_fts, adj_mat, hidden, edge_em):
         out_size=192,
         mid_size=192,
         activation=None,
-        reduction=jnp.max,
+        reduction=jnp.mean,
         num_layers=3,
     )
     return model(node_fts, edge_fts, graph_fts, adj_mat, hidden, edge_em)
@@ -93,14 +100,19 @@ def l2_loss_function(parameters, batch):
         optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding)
     )
 
-    for mpnn_node_embedding, transformer_node_embedding in zip(
-        mpnn_node_features_all_layers,
-        transformer_node_features_all_layers,
-        strict=True,
-    ):
-        loss += jnp.mean(
-            optax.l2_loss(mpnn_node_embedding, transformer_node_embedding)
+    # for mpnn_node_embedding, transformer_node_embedding in zip(
+    #     mpnn_node_features_all_layers,
+    #     transformer_node_features_all_layers,
+    #     strict=True,
+    # ):
+    #     loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
+
+    loss += jnp.mean(
+        optax.l2_loss(
+            mpnn_node_features_all_layers[-1],
+            transformer_node_features_all_layers[-1],
         )
+    )
 
     return loss
 
@@ -113,10 +125,10 @@ def train_step(parameters, optimizer_state, batch):
     return new_parameters, optimizer_state, loss
 
 
-checkpointer = Checkpointer(f"{MODEL_DIR}/mpnn.pkl")
+checkpointer = Checkpointer(f"{MODEL_DIR}/0_mean_final_layers_edges.pkl")
 
 
-def train_model(parameters, optimizer_state, epochs=100):
+def train_model(parameters, optimizer_state, epochs=1000):
     best_validation_loss = float("inf")
 
     for epoch in range(epochs):
@@ -136,14 +148,17 @@ def train_model(parameters, optimizer_state, epochs=100):
             num_batches += 1
 
         train_loss = total_loss / num_batches
-        print(f"Epoch {epoch}, Loss: {train_loss.item()}")
 
         validation_loss = validate_model(parameters, ValidationMode.VALIDATION)
+        test_loss = validate_model(parameters, ValidationMode.TEST)
+
+        print(f"Epoch {epoch}, Loss: {train_loss.item()}")
 
         wandb.log(
             {
-                "train_loss": train_loss.item(),
-                "validation_loss": validation_loss.item(),
+                "train_loss": train_loss,
+                "validation_loss": validation_loss,
+                "test_loss": test_loss,
             }
         )
 
@@ -181,6 +196,7 @@ def validate_model(parameters, mode: ValidationMode):
 
 if __name__ == "__main__":
     parameters = train_model(parameters, optimizer_state)
+    parameters = checkpointer.load()
     test_loss = validate_model(parameters, ValidationMode.TEST)
 
     wandb.log({"test_loss": test_loss})
