@@ -57,6 +57,7 @@ class MPNNLayer(hk.Module):
 
         o1 = hk.Linear(self.out_size)
         o2 = hk.Linear(self.out_size)
+        o3 = hk.Linear(self.out_size)
 
         msg_1 = m_1(node_tensors)
         msg_2 = m_2(node_tensors)
@@ -87,6 +88,8 @@ class MPNNLayer(hk.Module):
         h_1 = o1(node_tensors)
         h_2 = o2(msgs)
 
+        h_e = o3(msg_e)
+
         ret = h_1 + h_2
 
         if self.activation is not None:
@@ -96,7 +99,7 @@ class MPNNLayer(hk.Module):
             ln = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
             ret = ln(ret)
 
-        return ret, msg_e
+        return ret, h_e
 
 
 class AlignedMPNN(hk.Module):

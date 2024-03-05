@@ -1,4 +1,4 @@
-from enum import StrEnum, auto
+from enum import Enum, auto
 from pathlib import Path
 
 import click
@@ -16,7 +16,7 @@ MODEL_DIR = Path(Path.cwd(), "trained_models")
 MODEL_DIR.mkdir(exist_ok=True, parents=True)
 
 
-class ValidationMode(StrEnum):
+class ValidationMode(Enum):
     VALIDATION = auto()
     TEST = auto()
 
@@ -138,7 +138,6 @@ def train_model(
         train_loss = total_loss / num_batches
 
         validation_loss = validate_model(parameters, ValidationMode.VALIDATION)
-        test_loss = validate_model(parameters, ValidationMode.TEST)
 
         print(f"Epoch {epoch}, Loss: {train_loss.item()}")
 
@@ -147,7 +146,6 @@ def train_model(
                 {
                     "train_loss": train_loss,
                     "validation_loss": validation_loss,
-                    "test_loss": test_loss,
                 }
             )
 
@@ -188,7 +186,7 @@ def validate_model(parameters, mode: ValidationMode):
 @click.option("--mid_dim", type=int, default=192)
 @click.option("--add_virtual_node", type=bool, default=True)
 @click.option("--reduction", type=str, default="mean")
-@click.option("--use_wandb", type=bool, default=False)
+@click.option("--use_wandb", type=bool, default=True)
 def main(
     use_layer_norm: bool,
     mid_dim: int,

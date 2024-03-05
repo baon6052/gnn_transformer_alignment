@@ -1,10 +1,10 @@
 import os
-from enum import StrEnum
+from enum import Enum
 
 import numpy as np
 
 
-class DatasetPath(StrEnum):
+class DatasetPath(Enum):
     TRAIN_PATH = "dataset/train"
     VALIDATION_PATH = "dataset/validation"
     TEST_PATH = "dataset/test"
@@ -57,6 +57,7 @@ def load_batch(batch_path: str):
 
 
 def dataloader(dataset_path: DatasetPath):
+    dataset_path = dataset_path.value
     batch_dirs = [
         os.path.join(dataset_path, d)
         for d in sorted(os.listdir(dataset_path))

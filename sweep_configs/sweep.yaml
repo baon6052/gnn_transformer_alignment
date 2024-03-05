@@ -28,7 +28,6 @@ parameters:
   mid_dim:
     distribution: categorical
     values:
-    - 192
     - 256
     - 512
     - 1024
