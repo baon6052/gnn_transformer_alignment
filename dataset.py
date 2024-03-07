@@ -31,16 +31,18 @@ def load_batch(batch_path: str):
     )
 
     node_features_all_layers = []
+    edge_features_all_layers = []
 
-    for i in range(3):
+    for i in range(4):
         node_features = np.load(
             os.path.join(batch_path, f"out_node_features_{i}.npy")
         )
         node_features_all_layers.append(node_features)
 
-    out_edge_features = np.load(
-        os.path.join(batch_path, "out_edge_features.npy")
-    )
+        edge_features = np.load(
+            os.path.join(batch_path, f"out_edge_features_{i}.npy")
+        )
+        edge_features_all_layers.append(edge_features)
 
     return (
         (
@@ -52,7 +54,7 @@ def load_batch(batch_path: str):
             input_hidden_edge_features,
         ),
         node_features_all_layers,
-        out_edge_features,
+        edge_features_all_layers,
     )
 
 

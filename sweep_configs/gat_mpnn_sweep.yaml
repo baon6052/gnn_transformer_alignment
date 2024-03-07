@@ -47,4 +47,10 @@ parameters:
   apply_attention:
     distribution: categorical
     values:
-      - false
+      - true
+
+  number_of_attention_heads:
+    distribution: categorical
+    values:
+      - 1
+      - 3

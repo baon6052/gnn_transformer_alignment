@@ -11,10 +11,11 @@ import wandb
 from checkpointer import Checkpointer
 from dataset import DatasetPath, dataloader
 from models.att_mpnn import AttMPNN
+from models.gat_mpnn import GATMPNN
 from models.mpnn import AlignedMPNN
 from models.qkv_att_mpnn import QKVMPNN
 
-MODEL_DIR = Path(Path.cwd(), "trained_models_no_edge_updates")
+MODEL_DIR = Path(Path.cwd(), "trained_models")
 MODEL_DIR.mkdir(exist_ok=True, parents=True)
 
 
@@ -55,6 +56,8 @@ def model_fn(
     use_layer_norm: bool = True,
     add_virtual_node: bool = True,
     disable_edge_updates: bool = True,
+    apply_attention: bool = False,
+    number_of_attention_heads: int = 1,
 ):
     model = AlignedMPNN(
         nb_layers=3,
@@ -65,6 +68,8 @@ def model_fn(
         use_ln=use_layer_norm,
         add_virtual_node=add_virtual_node,
         disable_edge_updates=disable_edge_updates,
+        apply_attention=apply_attention,
+        number_of_attention_heads=number_of_attention_heads,
     )
 
     return model(node_fts, edge_fts, graph_fts, adj_mat, hidden, edge_em)
@@ -81,10 +86,10 @@ def l2_loss_function(parameters, batch):
             input_edge_em,
         ),
         transformer_node_features_all_layers,
-        transformer_edge_embedding,
+        transformer_edge_features_all_layers,
     ) = batch
 
-    mpnn_node_features_all_layers, mpnn_edge_embeddings = model.apply(
+    mpnn_node_features_all_layers, mpnn_edge_features_all_layers = model.apply(
         parameters,
         input_node_fts,
         input_edge_fts,
@@ -94,14 +99,25 @@ def l2_loss_function(parameters, batch):
         input_edge_em,
     )
 
-    loss = jnp.mean(optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding))
+    loss = 0.0
 
     for mpnn_node_embedding, transformer_node_embedding in zip(
         mpnn_node_features_all_layers,
         transformer_node_features_all_layers,
         strict=True,
     ):
-        loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
+        loss += jnp.mean(
+            optax.l2_loss(mpnn_node_embedding, transformer_node_embedding)
+        )
+
+    for mpnn_edge_embedding, transformer_edge_embedding in zip(
+        mpnn_edge_features_all_layers,
+        transformer_edge_features_all_layers,
+        strict=True,
+    ):
+        loss += jnp.mean(
+            optax.l2_loss(mpnn_edge_embedding, transformer_edge_embedding)
+        )
 
     return loss
 
@@ -114,7 +130,9 @@ def train_step(parameters, optimizer_state, batch):
     return new_parameters, optimizer_state, loss
 
 
-def train_model(parameters, optimizer_state, use_wandb, checkpointer, epochs=25):
+def train_model(
+    parameters, optimizer_state, use_wandb, checkpointer, epochs=25
+):
     best_validation_loss = float("inf")
 
     for epoch in range(epochs):
@@ -186,6 +204,8 @@ def validate_model(parameters, mode: ValidationMode):
 @click.option("--add_virtual_node", type=bool, default=True)
 @click.option("--reduction", type=str, default="max")
 @click.option("--disable_edge_updates", type=bool, default=True)
+@click.option("--apply_attention", type=bool, default=False)
+@click.option("--number_of_attention_heads", type=int, default=1)
 @click.option("--use_wandb", type=bool, default=True)
 def main(
     model_save_name: str | None,
@@ -194,9 +214,10 @@ def main(
     add_virtual_node: bool,
     reduction: str,
     disable_edge_updates: bool,
+    apply_attention: bool,
+    number_of_attention_heads: int,
     use_wandb: bool,
 ) -> None:
-
     global model, parameters, optimizer, optimizer_state
 
     if model_save_name is None:
@@ -222,6 +243,8 @@ def main(
             use_layer_norm=use_layer_norm,
             add_virtual_node=add_virtual_node,
             disable_edge_updates=disable_edge_updates,
+            apply_attention=apply_attention,
+            number_of_attention_heads=number_of_attention_heads,
         )
 
     model = hk.without_apply_rng(hk.transform(model_wrapper))
