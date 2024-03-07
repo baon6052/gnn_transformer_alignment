@@ -5,6 +5,6 @@ clrs_dataset
 .DS_Store
 no_ede_processing_dataset
 wandb/
-trained_models/
+trained_models_no_edge_updates/
 **.ipynb_checkpoints**
 dataset

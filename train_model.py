@@ -14,7 +14,7 @@ from models.att_mpnn import AttMPNN
 from models.mpnn import AlignedMPNN
 from models.qkv_att_mpnn import QKVMPNN
 
-MODEL_DIR = Path(Path.cwd(), "trained_models")
+MODEL_DIR = Path(Path.cwd(), "trained_models_no_edge_updates")
 MODEL_DIR.mkdir(exist_ok=True, parents=True)
 
 
@@ -56,7 +56,7 @@ def model_fn(
     add_virtual_node: bool = True,
     disable_edge_updates: bool = True,
 ):
-    model = AttMPNN(
+    model = AlignedMPNN(
         nb_layers=3,
         out_size=192,
         mid_size=mid_size,
@@ -186,7 +186,7 @@ def validate_model(parameters, mode: ValidationMode):
 @click.option("--add_virtual_node", type=bool, default=True)
 @click.option("--reduction", type=str, default="max")
 @click.option("--disable_edge_updates", type=bool, default=True)
-@click.option("--use_wandb", type=bool, default=False)
+@click.option("--use_wandb", type=bool, default=True)
 def main(
     model_save_name: str | None,
     use_layer_norm: bool,
@@ -244,7 +244,7 @@ def main(
             project="gnn_alignment",
             entity="monoids",
             name=model_save_name,
-            group="experiment_1",
+            group="experiment_2",
         )
 
     checkpointer = Checkpointer(f"{MODEL_DIR}/{model_save_name}.pkl")
