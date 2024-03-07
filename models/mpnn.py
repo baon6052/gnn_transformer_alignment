@@ -28,6 +28,8 @@ class MPNNLayer(hk.Module):
         disable_edge_updates: bool = True,
         dropout_rate: float = 0.0,
         graph_vec: str = "att",
+        apply_attention: bool = False,
+        number_of_attention_heads: int = 1,
     ):
         super().__init__(name=name)
         self.nb_layers = nb_layers
@@ -47,6 +49,9 @@ class MPNNLayer(hk.Module):
         self.disable_edge_updates = disable_edge_updates
         self.dropout_rate = dropout_rate
         self.graph_vec = graph_vec
+
+        self.apply_attention = apply_attention
+        self.number_of_attention_heads = number_of_attention_heads
 
     def __call__(
         self,
@@ -82,6 +87,42 @@ class MPNNLayer(hk.Module):
             + msg_e
             + jnp.expand_dims(msg_g, axis=(1, 2))
         )
+
+        if self.apply_attention:
+            a_1 = hk.Linear(self.number_of_attention_heads)
+            a_2 = hk.Linear(self.number_of_attention_heads)
+            a_e = hk.Linear(self.number_of_attention_heads)
+            a_g = hk.Linear(self.number_of_attention_heads)
+            attention_score_layer = hk.Linear(1)
+
+            bias_mat = (adj_mat - 1.0) * 1e9
+            bias_mat = jnp.tile(
+                bias_mat[..., None], (1, 1, 1, self.number_of_attention_heads)
+            )  # [B, N, N, H]
+            bias_mat = jnp.transpose(bias_mat, (0, 3, 1, 2))  # [B, H, N, N]
+
+            att_1 = jnp.expand_dims(a_1(node_tensors), axis=-1)
+            att_2 = jnp.expand_dims(a_2(node_tensors), axis=-1)
+            att_e = a_e(edge_fts)
+            att_g = jnp.expand_dims(a_g(graph_fts), axis=-1)
+
+            logits = (
+                jnp.transpose(att_1, (0, 2, 1, 3))
+                + jnp.transpose(att_2, (0, 2, 3, 1))  # + [B, H, N, 1]
+                + jnp.transpose(att_e, (0, 3, 1, 2))  # + [B, H, 1, N]
+                + jnp.expand_dims(  # + [B, H, N, N]
+                    att_g, axis=-1
+                )  # + [B, H, 1, 1]
+            )  # = [B, H, N, N]
+
+            # Calculate coefficients and reduce to a single logit
+            logits = jax.nn.leaky_relu(logits) + bias_mat  # [B, H. N. N]
+            logits = jnp.transpose(logits, (0, 2, 3, 1))  # [B, N, N, H]
+            logits = attention_score_layer(logits)  # [B, N, N, 1]
+            coefs = jax.nn.softmax(logits, axis=-1)  # [B, N, N, 1]
+
+            msgs = coefs * msgs
+
         if self._msgs_mlp_sizes is not None:
             msgs = hk.nets.MLP(self._msgs_mlp_sizes)(jax.nn.relu(msgs))
 
@@ -138,16 +179,13 @@ class MPNNLayer(hk.Module):
 
             residuals = EL2(jax.nn.relu(EL1(concatenated_inputs)))
             # residuals = hk.dropout(hk.next_rng_key(), self.dropout_rate, residuals)
-            edge_tensors = ELN1(msg_e + residuals)
+            msg_e = ELN1(msg_e + residuals)
 
-            residuals = EL4(jax.nn.relu(EL3(edge_tensors)))
+            residuals = EL4(jax.nn.relu(EL3(msg_e)))
             # residuals = hk.dropout(hk.next_rng_key(), self.dropout_rate, residuals)
-            edge_tensors = ELN2(edge_tensors + residuals)
+            msg_e = ELN2(msg_e + residuals)
 
-            return ret, edge_tensors
-
-        if self.mid_size != 192:
-            msg_e = o3(msg_e)
+        msg_e = o3(msg_e)
 
         return ret, msg_e
 
@@ -166,6 +204,8 @@ class AlignedMPNN(hk.Module):
         add_virtual_node: bool = True,
         disable_edge_updates: bool = True,
         name: str = "mpnn_mp",
+        apply_attention: bool = False,
+        number_of_attention_heads: int = 1,
     ):
         super().__init__(name=name)
         self.nb_layers = nb_layers
@@ -182,6 +222,9 @@ class AlignedMPNN(hk.Module):
         self.add_virtual_node = add_virtual_node
         self.disable_edge_updates = disable_edge_updates
 
+        self.apply_attention = apply_attention
+        self.number_of_attention_heads = number_of_attention_heads
+
     def __call__(
         self,
         node_fts: _Array,
@@ -192,9 +235,21 @@ class AlignedMPNN(hk.Module):
         edge_em: _Array,
         num_layers: int = 3,
     ) -> tuple[list[_Array], _Array]:
+        node_features_all_layers = []
+        edge_features_all_layers = []
+
         node_tensors = jnp.concatenate([node_fts, hidden], axis=-1)
         edge_tensors = jnp.concatenate([edge_fts, edge_em], axis=-1)
         graph_tensors = graph_fts
+
+        node_enc = hk.Linear(self.out_size)
+        edge_enc = hk.Linear(self.out_size)
+
+        node_tensors = node_enc(node_tensors)
+        edge_tensors = edge_enc(edge_tensors)
+
+        node_features_all_layers.append(deepcopy(node_tensors))
+        edge_features_all_layers.append(deepcopy(edge_tensors))
 
         if self.add_virtual_node:
             # NODE FEATURES
@@ -239,12 +294,17 @@ class AlignedMPNN(hk.Module):
             virtual_node_adj_mat_row = jnp.ones(
                 (adj_mat.shape[0], 1, adj_mat.shape[-1])
             )
-            adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_row], axis=1)
-            virtual_node_adj_mat_col = jnp.ones((adj_mat.shape[0], adj_mat.shape[1], 1))
-            adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_col], axis=2)
+            adj_mat = jnp.concatenate(
+                [adj_mat, virtual_node_adj_mat_row], axis=1
+            )
+            virtual_node_adj_mat_col = jnp.ones(
+                (adj_mat.shape[0], adj_mat.shape[1], 1)
+            )
+            adj_mat = jnp.concatenate(
+                [adj_mat, virtual_node_adj_mat_col], axis=2
+            )
 
         layers = []
-        node_features_all_layers = []
 
         for _ in range(num_layers):
             layers.append(
@@ -256,6 +316,8 @@ class AlignedMPNN(hk.Module):
                     reduction=self.reduction,
                     use_ln=self.use_ln,
                     disable_edge_updates=self.disable_edge_updates,
+                    apply_attention=self.apply_attention,
+                    number_of_attention_heads=self.number_of_attention_heads,
                 )
             )
 
@@ -273,18 +335,21 @@ class AlignedMPNN(hk.Module):
                 node_features_all_layers.append(
                     deepcopy(node_tensors[:, : node_tensors.shape[1] - 1, :])
                 )
+                edge_features_all_layers.append(
+                    deepcopy(
+                        edge_tensors[
+                            :,
+                            : edge_tensors.shape[1] - 1,
+                            : edge_tensors.shape[2] - 1,
+                            :,
+                        ]
+                    )
+                )
             else:
                 node_features_all_layers.append(deepcopy(node_tensors))
+                edge_features_all_layers.append(deepcopy(edge_tensors))
 
         if self.add_virtual_node:
-            return (
-                node_features_all_layers,
-                edge_tensors[
-                    :,
-                    : edge_tensors.shape[1] - 1,
-                    : edge_tensors.shape[2] - 1,
-                    :,
-                ],
-            )
+            return (node_features_all_layers, edge_features_all_layers)
 
-        return node_features_all_layers, edge_tensors
+        return node_features_all_layers, edge_features_all_layers
