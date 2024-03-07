@@ -52,6 +52,7 @@ def model_fn(
     reduction_func=jnp.mean,
     use_layer_norm: bool = True,
     add_virtual_node: bool = True,
+    disable_edge_updates: bool = True,
 ):
     model = AlignedMPNN(
         nb_layers=3,
@@ -61,6 +62,7 @@ def model_fn(
         reduction=reduction_func,
         use_ln=use_layer_norm,
         add_virtual_node=add_virtual_node,
+        disable_edge_updates=disable_edge_updates,
     )
 
     return model(node_fts, edge_fts, graph_fts, adj_mat, hidden, edge_em)
@@ -90,18 +92,14 @@ def l2_loss_function(parameters, batch):
         input_edge_em,
     )
 
-    loss = jnp.mean(
-        optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding)
-    )
+    loss = jnp.mean(optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding))
 
     for mpnn_node_embedding, transformer_node_embedding in zip(
         mpnn_node_features_all_layers,
         transformer_node_features_all_layers,
         strict=True,
     ):
-        loss += jnp.mean(
-            optax.l2_loss(mpnn_node_embedding, transformer_node_embedding)
-        )
+        loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
 
     return loss
 
@@ -114,9 +112,7 @@ def train_step(parameters, optimizer_state, batch):
     return new_parameters, optimizer_state, loss
 
 
-def train_model(
-    parameters, optimizer_state, use_wandb, checkpointer, epochs=25
-):
+def train_model(parameters, optimizer_state, use_wandb, checkpointer, epochs=25):
     best_validation_loss = float("inf")
 
     for epoch in range(epochs):
@@ -186,17 +182,38 @@ def validate_model(parameters, mode: ValidationMode):
 @click.option("--mid_dim", type=int, default=192)
 @click.option("--add_virtual_node", type=bool, default=True)
 @click.option("--reduction", type=str, default="mean")
+@click.option("--disable_edge_updates", type=bool, default=True)
 @click.option("--use_wandb", type=bool, default=True)
+def click_main(
+    use_layer_norm: bool,
+    mid_dim: int,
+    add_virtual_node: bool,
+    reduction: str,
+    disable_edge_updates: bool,
+    use_wandb: bool,
+) -> None:
+    main(
+        use_layer_norm=use_layer_norm,
+        mid_dim=mid_dim,
+        add_virtual_node=add_virtual_node,
+        reduction=reduction,
+        disable_edge_updates=disable_edge_updates,
+        use_wandb=use_wandb,
+    )
+
+
 def main(
     use_layer_norm: bool,
     mid_dim: int,
     add_virtual_node: bool,
     reduction: str,
+    disable_edge_updates: bool,
     use_wandb: bool,
 ) -> None:
+
     global model, parameters, optimizer, optimizer_state
 
-    model_save_name = f"vn_{add_virtual_node}_ln_{use_layer_norm}_mid_dim_{mid_dim}_reduction_{reduction}"
+    model_save_name = f"vn_{add_virtual_node}_ln_{use_layer_norm}_mid_dim_{mid_dim}_reduction_{reduction}_disable_edge_updates_{disable_edge_updates}"
     reduction_func = jnp.mean
 
     if reduction == "sum":
@@ -216,6 +233,7 @@ def main(
             reduction_func=reduction_func,
             use_layer_norm=use_layer_norm,
             add_virtual_node=add_virtual_node,
+            disable_edge_updates=disable_edge_updates,
         )
 
     model = hk.without_apply_rng(hk.transform(model_wrapper))
@@ -257,4 +275,11 @@ def main(
 
 
 if __name__ == "__main__":
-    main()
+    main(
+        use_layer_norm=True,
+        mid_dim=192,
+        add_virtual_node=True,
+        reduction="mean",
+        disable_edge_updates=False,
+        use_wandb=True,
+    )
