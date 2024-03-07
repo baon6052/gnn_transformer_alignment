@@ -3,7 +3,7 @@
 .vscode
 clrs_dataset
 .DS_Store
-dataset
+**dataset**
 wandb/
 trained_models/
 **.ipynb_checkpoints**
