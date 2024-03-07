@@ -10,7 +10,9 @@ import optax
 import wandb
 from checkpointer import Checkpointer
 from dataset import DatasetPath, dataloader
+from models.att_mpnn import AttMPNN
 from models.mpnn import AlignedMPNN
+from models.qkv_att_mpnn import QKVMPNN
 
 MODEL_DIR = Path(Path.cwd(), "trained_models")
 MODEL_DIR.mkdir(exist_ok=True, parents=True)
@@ -53,7 +55,7 @@ def model_fn(
     use_layer_norm: bool = True,
     add_virtual_node: bool = True,
 ):
-    model = AlignedMPNN(
+    model = AttMPNN(
         nb_layers=3,
         out_size=192,
         mid_size=mid_size,
@@ -182,12 +184,14 @@ def validate_model(parameters, mode: ValidationMode):
 
 
 @click.command()
+@click.option("--model_save_name", type=str, default=None)
 @click.option("--use_layer_norm", type=bool, default=True)
 @click.option("--mid_dim", type=int, default=192)
 @click.option("--add_virtual_node", type=bool, default=True)
-@click.option("--reduction", type=str, default="mean")
-@click.option("--use_wandb", type=bool, default=True)
+@click.option("--reduction", type=str, default="max")
+@click.option("--use_wandb", type=bool, default=False)
 def main(
+    model_save_name: str | None,
     use_layer_norm: bool,
     mid_dim: int,
     add_virtual_node: bool,
@@ -196,7 +200,9 @@ def main(
 ) -> None:
     global model, parameters, optimizer, optimizer_state
 
-    model_save_name = f"vn_{add_virtual_node}_ln_{use_layer_norm}_mid_dim_{mid_dim}_reduction_{reduction}"
+    if model_save_name is None:
+        model_save_name = f"vn_{add_virtual_node}_ln_{use_layer_norm}_mid_dim_{mid_dim}_reduction_{reduction}"
+
     reduction_func = jnp.mean
 
     if reduction == "sum":

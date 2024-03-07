@@ -11,7 +11,7 @@ _Fn = Callable[..., Any]
 BIG_NUMBER = 1e6
 
 
-class MPNNLayer(hk.Module):
+class AttMPNNLayer(hk.Module):
     def __init__(
         self,
         nb_layers: int,
@@ -64,12 +64,47 @@ class MPNNLayer(hk.Module):
         msg_e = m_e(edge_tensors)
         msg_g = m_g(graph_tensors)
 
+
+        # Attention Mechanism
+        a = hk.Linear(1)
+
         msgs = (
             jnp.expand_dims(msg_1, axis=1)
             + jnp.expand_dims(msg_2, axis=2)
             + msg_e
             + jnp.expand_dims(msg_g, axis=(1, 2))
         )
+
+        '''
+        node_fts: (4, 16, 192)
+        N = 16
+        f_expand: (4, 16, 1, 192)
+        f_tiled: (4, 16, 16, 192)
+        f_tiled_transpose: (4, 16, 16, 192)
+        
+        '''
+
+        N = node_fts.shape[1]
+        f_expand = jnp.expand_dims(node_fts, 2)
+        f_tiled = jnp.tile(f_expand, [1, 1, N, 1])
+
+        f_tiled_transpose = jnp.transpose(f_tiled, [0, 2, 1, 3])
+
+        concat_features = jnp.reshape(
+            jnp.concatenate([f_tiled, f_tiled_transpose], axis=-1),
+            [-1, 2 * node_fts.shape[-1]]
+        )
+        raw_attn_scores = jnp.reshape(
+            a(concat_features),
+            [-1, N, N]
+        )
+
+        masked_attn_scores = jnp.where(adj_mat > 0, raw_attn_scores, -jnp.inf)
+        attn_coeffs = jax.nn.softmax(masked_attn_scores, axis=2)
+
+        msgs = msgs * jnp.expand_dims(attn_coeffs, axis=-1)
+
+
 
         if self._msgs_mlp_sizes is not None:
             msgs = hk.nets.MLP(self._msgs_mlp_sizes)(jax.nn.relu(msgs))
@@ -103,7 +138,7 @@ class MPNNLayer(hk.Module):
         return ret, h_e
 
 
-class AlignedMPNN(hk.Module):
+class AttMPNN(hk.Module):
     def __init__(
         self,
         nb_layers: int,
@@ -203,7 +238,7 @@ class AlignedMPNN(hk.Module):
 
         for _ in range(num_layers):
             layers.append(
-                MPNNLayer(
+                AttMPNNLayer(
                     nb_layers=self.nb_layers,
                     out_size=self.out_size,
                     mid_size=self.mid_size,

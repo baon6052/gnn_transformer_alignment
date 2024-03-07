@@ -1,3 +1,4 @@
+import math
 from copy import deepcopy
 from typing import Any, Callable, List, Optional
 
@@ -11,7 +12,7 @@ _Fn = Callable[..., Any]
 BIG_NUMBER = 1e6
 
 
-class MPNNLayer(hk.Module):
+class QKVMPNNLayer(hk.Module):
     def __init__(
         self,
         nb_layers: int,
@@ -23,6 +24,10 @@ class MPNNLayer(hk.Module):
         msgs_mlp_sizes: Optional[List[int]] = None,
         use_ln: bool = False,
         name: str = "mpnn_mp",
+        number_of_attention_heads: int = 1,
+        node_hid_size=32,
+        edge_hid_size_1=16,
+        edge_hid_size_2=8,
     ):
         super().__init__(name=name)
         self.nb_layers = nb_layers
@@ -36,6 +41,109 @@ class MPNNLayer(hk.Module):
         self.reduction = reduction
         self._msgs_mlp_sizes = msgs_mlp_sizes
         self.use_ln = use_ln
+
+        self.node_feature_size = out_size
+        self.number_of_attention_heads = number_of_attention_heads
+        self.out_attention_head_size = self.node_feature_size // self.number_of_attention_heads
+        self.node_hid_size = node_hid_size
+        self.edge_hid_size_1 = edge_hid_size_1
+        self.edge_hid_size_2 = edge_hid_size_2
+
+        self.scale = 1.0 / math.sqrt(self.out_attention_head_size)
+
+    def separate_node_heads(self, x):
+        new_shape = x.shape[:-1] + (self.number_of_attention_heads, self.out_attention_head_size)
+        x = jnp.reshape(x, new_shape)
+        return jnp.transpose(x, (0, 2, 1, 3))
+
+    def separate_edge_heads(self, x):
+        new_shape = x.shape[:-1] + (self.number_of_attention_heads, self.out_attention_head_size)
+        x = jnp.reshape(x, new_shape)
+        return jnp.transpose(x, (0, 3, 1, 2, 4))
+
+    def separate_graph_heads(self, x):
+        x = jnp.expand_dims(x, -2)
+        new_shape = x.shape[:-1] + (self.number_of_attention_heads, self.out_attention_head_size)
+        x = jnp.reshape(x, new_shape)
+        return jnp.transpose(x, (0, 2, 1, 3))
+
+    def concatenate_heads(self, x):
+        x = jnp.transpose(x, (0, 2, 1, 3))
+        new_shape = x.shape[:-2] + (self.out_attention_head_size,)
+        return jnp.reshape(x, new_shape)
+
+    def apply_attention(self, node_tensors, edge_tensors, graph_tensors):
+        Wnq = hk.Linear(self.out_size)
+        Wnk = hk.Linear(self.out_size)
+        Wnv = hk.Linear(self.out_size)
+
+        Weq = hk.Linear(self.out_size)
+        Wek = hk.Linear(self.out_size)
+        Wev = hk.Linear(self.out_size)
+
+        Wgq = hk.Linear(self.out_size)
+        Wgk = hk.Linear(self.out_size)
+        Wgv = hk.Linear(self.out_size)
+
+        B = node_tensors.shape[0]
+        N = node_tensors.shape[1]
+
+        eQ = Weq(edge_tensors)
+        eK = Wek(edge_tensors)
+        eV = Wev(edge_tensors)
+
+        nQ = Wnq(node_tensors)
+        nK = Wnk(node_tensors)
+        nV = Wnv(node_tensors)
+
+        gQ = Wgq(graph_tensors)
+        gK = Wgk(graph_tensors)
+        gV = Wgv(graph_tensors)
+
+        eQ = self.separate_edge_heads(eQ)
+        eK = self.separate_edge_heads(eK)
+        eV = self.separate_edge_heads(eV)
+
+        nQ = self.separate_node_heads(nQ)
+        nK = self.separate_node_heads(nK)
+        nV = self.separate_node_heads(nV)
+
+        gQ = self.separate_graph_heads(gQ)
+        gK = self.separate_graph_heads(gK)
+        gV = self.separate_graph_heads(gV)
+
+        Q = (
+                eQ
+                + jnp.reshape(nQ, (B, self.number_of_attention_heads, N, 1, self.out_attention_head_size))
+                + jnp.reshape(gQ, (B, self.number_of_attention_heads, 1, 1, self.out_attention_head_size))
+        )
+        K = (
+                eK
+                + jnp.reshape(nK, (B, self.number_of_attention_heads, 1, N, self.out_attention_head_size))
+                + jnp.reshape(gK, (B, self.number_of_attention_heads, 1, 1, self.out_attention_head_size))
+        )
+
+        Q = jnp.reshape(Q, (B, self.number_of_attention_heads, N, N, 1, self.out_attention_head_size))
+        K = jnp.reshape(K, (B, self.number_of_attention_heads, N, N, self.out_attention_head_size, 1))
+        QK = jnp.matmul(Q, K)
+        QK = jnp.reshape(QK, (B, self.number_of_attention_heads, N, N))
+
+        QK = QK * self.scale
+        att_dist = jax.nn.softmax(QK, axis=-1)
+
+        att_dist = jnp.reshape(att_dist, (B, self.number_of_attention_heads, N, 1, N))
+
+        v2 = (
+                eV
+                + jnp.reshape(nV, (B, self.number_of_attention_heads, 1, N, self.out_attention_head_size))
+                + jnp.reshape(gV, (B, self.number_of_attention_heads, 1, 1, self.out_attention_head_size))
+        )
+
+        new_nodes = jnp.matmul(att_dist, v2)
+        new_nodes = jnp.reshape(new_nodes, (B, self.number_of_attention_heads, N, self.out_attention_head_size))
+
+        return self.concatenate_heads(new_nodes)
+
 
     def __call__(
         self,
@@ -59,8 +167,13 @@ class MPNNLayer(hk.Module):
         o2 = hk.Linear(self.out_size)
         o3 = hk.Linear(self.out_size)
 
-        msg_1 = m_1(node_tensors)
-        msg_2 = m_2(node_tensors)
+        attention_linear_layer = hk.Linear(self.mid_size)
+
+        attended_node_tensors = self.apply_attention(node_tensors, edge_tensors, graph_tensors)
+        attended_node_tensors = attention_linear_layer(attended_node_tensors)
+
+        msg_1 = m_1(attended_node_tensors)
+        msg_2 = m_2(attended_node_tensors)
         msg_e = m_e(edge_tensors)
         msg_g = m_g(graph_tensors)
 
@@ -103,7 +216,7 @@ class MPNNLayer(hk.Module):
         return ret, h_e
 
 
-class AlignedMPNN(hk.Module):
+class QKVMPNN(hk.Module):
     def __init__(
         self,
         nb_layers: int,
@@ -203,7 +316,7 @@ class AlignedMPNN(hk.Module):
 
         for _ in range(num_layers):
             layers.append(
-                MPNNLayer(
+                QKVMPNNLayer(
                     nb_layers=self.nb_layers,
                     out_size=self.out_size,
                     mid_size=self.mid_size,
