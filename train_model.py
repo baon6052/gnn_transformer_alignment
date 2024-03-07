@@ -10,10 +10,7 @@ import optax
 import wandb
 from checkpointer import Checkpointer
 from dataset import DatasetPath, dataloader
-from models.att_mpnn import AttMPNN
-from models.gat_mpnn import GATMPNN
 from models.mpnn import AlignedMPNN
-from models.qkv_att_mpnn import QKVMPNN
 
 MODEL_DIR = Path(Path.cwd(), "trained_models")
 MODEL_DIR.mkdir(exist_ok=True, parents=True)
