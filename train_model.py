@@ -54,6 +54,7 @@ def model_fn(
     reduction_func=jnp.mean,
     use_layer_norm: bool = True,
     add_virtual_node: bool = True,
+    disable_edge_updates: bool = True,
 ):
     model = AttMPNN(
         nb_layers=3,
@@ -63,6 +64,7 @@ def model_fn(
         reduction=reduction_func,
         use_ln=use_layer_norm,
         add_virtual_node=add_virtual_node,
+        disable_edge_updates=disable_edge_updates,
     )
 
     return model(node_fts, edge_fts, graph_fts, adj_mat, hidden, edge_em)
@@ -92,18 +94,14 @@ def l2_loss_function(parameters, batch):
         input_edge_em,
     )
 
-    loss = jnp.mean(
-        optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding)
-    )
+    loss = jnp.mean(optax.l2_loss(mpnn_edge_embeddings, transformer_edge_embedding))
 
     for mpnn_node_embedding, transformer_node_embedding in zip(
         mpnn_node_features_all_layers,
         transformer_node_features_all_layers,
         strict=True,
     ):
-        loss += jnp.mean(
-            optax.l2_loss(mpnn_node_embedding, transformer_node_embedding)
-        )
+        loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
 
     return loss
 
@@ -116,9 +114,7 @@ def train_step(parameters, optimizer_state, batch):
     return new_parameters, optimizer_state, loss
 
 
-def train_model(
-    parameters, optimizer_state, use_wandb, checkpointer, epochs=25
-):
+def train_model(parameters, optimizer_state, use_wandb, checkpointer, epochs=25):
     best_validation_loss = float("inf")
 
     for epoch in range(epochs):
@@ -189,6 +185,7 @@ def validate_model(parameters, mode: ValidationMode):
 @click.option("--mid_dim", type=int, default=192)
 @click.option("--add_virtual_node", type=bool, default=True)
 @click.option("--reduction", type=str, default="max")
+@click.option("--disable_edge_updates", type=bool, default=True)
 @click.option("--use_wandb", type=bool, default=False)
 def main(
     model_save_name: str | None,
@@ -196,8 +193,10 @@ def main(
     mid_dim: int,
     add_virtual_node: bool,
     reduction: str,
+    disable_edge_updates: bool,
     use_wandb: bool,
 ) -> None:
+
     global model, parameters, optimizer, optimizer_state
 
     if model_save_name is None:
@@ -222,6 +221,7 @@ def main(
             reduction_func=reduction_func,
             use_layer_norm=use_layer_norm,
             add_virtual_node=add_virtual_node,
+            disable_edge_updates=disable_edge_updates,
         )
 
     model = hk.without_apply_rng(hk.transform(model_wrapper))

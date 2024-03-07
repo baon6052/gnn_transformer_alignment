@@ -23,6 +23,11 @@ class MPNNLayer(hk.Module):
         msgs_mlp_sizes: Optional[List[int]] = None,
         use_ln: bool = False,
         name: str = "mpnn_mp",
+        edge_hid_size_1: int = 16,
+        edge_hid_size_2: int = 8,
+        disable_edge_updates: bool = True,
+        dropout_rate: float = 0.0,
+        graph_vec: str = "att",
     ):
         super().__init__(name=name)
         self.nb_layers = nb_layers
@@ -36,6 +41,12 @@ class MPNNLayer(hk.Module):
         self.reduction = reduction
         self._msgs_mlp_sizes = msgs_mlp_sizes
         self.use_ln = use_ln
+        self.edge_hidden_size_1 = edge_hid_size_1
+        self.edge_hidden_size_2 = edge_hid_size_2
+        self.edge_vec_size = mid_size  # =vec_size = out_size
+        self.disable_edge_updates = disable_edge_updates
+        self.dropout_rate = dropout_rate
+        self.graph_vec = graph_vec
 
     def __call__(
         self,
@@ -46,6 +57,7 @@ class MPNNLayer(hk.Module):
         hidden: _Array,
         edge_em: _Array,
     ) -> _Array:
+        N = node_fts.shape[1]
         node_tensors = node_fts
         edge_tensors = edge_fts
         graph_tensors = graph_fts
@@ -89,8 +101,6 @@ class MPNNLayer(hk.Module):
         h_1 = o1(node_tensors)
         h_2 = o2(msgs)
 
-        h_e = o3(msg_e)
-
         ret = h_1 + h_2
 
         if self.activation is not None:
@@ -100,7 +110,47 @@ class MPNNLayer(hk.Module):
             ln = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
             ret = ln(ret)
 
-        return ret, h_e
+        if not self.disable_edge_updates:
+            source_nodes = jnp.expand_dims(ret, 1)
+            expanded_source_nodes = jnp.tile(source_nodes, (1, N, 1, 1))
+            target_nodes = jnp.expand_dims(ret, 2)
+            expanded_target_nodes = jnp.tile(target_nodes, (1, 1, N, 1))
+            reversed_edge_tensors = jnp.swapaxes(msg_e, -2, -3)
+            input_tensors = (
+                msg_e,
+                reversed_edge_tensors,
+                expanded_source_nodes,
+                expanded_target_nodes,
+            )
+            if self.graph_vec == "att":
+                global_tensors = jnp.expand_dims(graph_tensors, (1, 2))
+                expanded_global_tensors = jnp.tile(global_tensors, (1, N, N, 1))
+                input_tensors += (expanded_global_tensors,)
+
+            concatenated_inputs = jnp.concatenate(input_tensors, axis=-1)
+
+            EL1 = hk.Linear(self.edge_hidden_size_1)
+            EL2 = hk.Linear(self.edge_vec_size)
+            ELN1 = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
+
+            EL3 = hk.Linear(self.edge_hidden_size_2)
+            EL4 = hk.Linear(self.edge_vec_size)
+            ELN2 = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
+
+            residuals = EL2(jax.nn.relu(EL1(concatenated_inputs)))
+            # residuals = hk.dropout(hk.next_rng_key(), self.dropout_rate, residuals)
+            edge_tensors = ELN1(msg_e + residuals)
+
+            residuals = EL4(jax.nn.relu(EL3(edge_tensors)))
+            # residuals = hk.dropout(hk.next_rng_key(), self.dropout_rate, residuals)
+            edge_tensors = ELN2(edge_tensors + residuals)
+
+            return ret, edge_tensors
+
+        if self.mid_size != 192:
+            msg_e = o3(msg_e)
+
+        return ret, msg_e
 
 
 class AlignedMPNN(hk.Module):
@@ -115,6 +165,7 @@ class AlignedMPNN(hk.Module):
         msgs_mlp_sizes: Optional[List[int]] = None,
         use_ln: bool = False,
         add_virtual_node: bool = True,
+        disable_edge_updates: bool = True,
         name: str = "mpnn_mp",
     ):
         super().__init__(name=name)
@@ -130,6 +181,7 @@ class AlignedMPNN(hk.Module):
         self._msgs_mlp_sizes = msgs_mlp_sizes
         self.use_ln = use_ln
         self.add_virtual_node = add_virtual_node
+        self.disable_edge_updates = disable_edge_updates
 
     def __call__(
         self,
@@ -188,15 +240,9 @@ class AlignedMPNN(hk.Module):
             virtual_node_adj_mat_row = jnp.ones(
                 (adj_mat.shape[0], 1, adj_mat.shape[-1])
             )
-            adj_mat = jnp.concatenate(
-                [adj_mat, virtual_node_adj_mat_row], axis=1
-            )
-            virtual_node_adj_mat_col = jnp.ones(
-                (adj_mat.shape[0], adj_mat.shape[1], 1)
-            )
-            adj_mat = jnp.concatenate(
-                [adj_mat, virtual_node_adj_mat_col], axis=2
-            )
+            adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_row], axis=1)
+            virtual_node_adj_mat_col = jnp.ones((adj_mat.shape[0], adj_mat.shape[1], 1))
+            adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_col], axis=2)
 
         layers = []
         node_features_all_layers = []
@@ -210,6 +256,7 @@ class AlignedMPNN(hk.Module):
                     activation=self.activation,
                     reduction=self.reduction,
                     use_ln=self.use_ln,
+                    disable_edge_updates=self.disable_edge_updates,
                 )
             )
 
