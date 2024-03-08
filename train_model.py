@@ -100,21 +100,17 @@ def l2_loss_function(parameters, batch):
 
     for mpnn_node_embedding, transformer_node_embedding in zip(
         mpnn_node_features_all_layers,
-        transformer_node_features_all_layers,
+        transformer_node_features_all_layers[1:],
         strict=True,
     ):
-        loss += jnp.mean(
-            optax.l2_loss(mpnn_node_embedding, transformer_node_embedding)
-        )
+        loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
 
     for mpnn_edge_embedding, transformer_edge_embedding in zip(
         mpnn_edge_features_all_layers,
-        transformer_edge_features_all_layers,
+        transformer_edge_features_all_layers[1:],
         strict=True,
     ):
-        loss += jnp.mean(
-            optax.l2_loss(mpnn_edge_embedding, transformer_edge_embedding)
-        )
+        loss += jnp.mean(optax.l2_loss(mpnn_edge_embedding, transformer_edge_embedding))
 
     return loss
 
@@ -127,9 +123,7 @@ def train_step(parameters, optimizer_state, batch):
     return new_parameters, optimizer_state, loss
 
 
-def train_model(
-    parameters, optimizer_state, use_wandb, checkpointer, epochs=25
-):
+def train_model(parameters, optimizer_state, use_wandb, checkpointer, epochs=25):
     best_validation_loss = float("inf")
 
     for epoch in range(epochs):
@@ -218,8 +212,11 @@ def main(
     global model, parameters, optimizer, optimizer_state
 
     if model_save_name is None:
-        model_save_name = f"vn_{add_virtual_node}_ln_{use_layer_norm}_mid_dim_{mid_dim}_reduction_{reduction}"
-
+        if apply_attention:
+            model_save_name = f"vn-{add_virtual_node}-ln-{use_layer_norm}-mid_dim-{mid_dim}-reduction-{reduction}-disable_edge_updates-{disable_edge_updates}-apply_attention-{apply_attention}-number_of_attention_heads-{number_of_attention_heads}"
+        else:
+            model_save_name = f"vn-{add_virtual_node}-ln-{use_layer_norm}-mid_dim-{mid_dim}-reduction-{reduction}-disable_edge_updates-{disable_edge_updates}-apply_attention-{apply_attention}"
+    model_save_name = "test"
     reduction_func = jnp.mean
 
     if reduction == "sum":

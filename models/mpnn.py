@@ -110,9 +110,7 @@ class MPNNLayer(hk.Module):
                 jnp.transpose(att_1, (0, 2, 1, 3))
                 + jnp.transpose(att_2, (0, 2, 3, 1))  # + [B, H, N, 1]
                 + jnp.transpose(att_e, (0, 3, 1, 2))  # + [B, H, 1, N]
-                + jnp.expand_dims(  # + [B, H, N, N]
-                    att_g, axis=-1
-                )  # + [B, H, 1, 1]
+                + jnp.expand_dims(att_g, axis=-1)  # + [B, H, N, N]  # + [B, H, 1, 1]
             )  # = [B, H, N, N]
 
             # Calculate coefficients and reduce to a single logit
@@ -242,14 +240,14 @@ class AlignedMPNN(hk.Module):
         edge_tensors = jnp.concatenate([edge_fts, edge_em], axis=-1)
         graph_tensors = graph_fts
 
-        node_enc = hk.Linear(self.out_size)
-        edge_enc = hk.Linear(self.out_size)
+        # node_enc = hk.Linear(self.out_size)
+        # edge_enc = hk.Linear(self.out_size)
 
-        node_tensors = node_enc(node_tensors)
-        edge_tensors = edge_enc(edge_tensors)
+        # node_tensors = node_enc(node_tensors)
+        # edge_tensors = edge_enc(edge_tensors)
 
-        node_features_all_layers.append(deepcopy(node_tensors))
-        edge_features_all_layers.append(deepcopy(edge_tensors))
+        # node_features_all_layers.append(deepcopy(node_tensors))
+        # edge_features_all_layers.append(deepcopy(edge_tensors))
 
         if self.add_virtual_node:
             # NODE FEATURES
@@ -294,15 +292,9 @@ class AlignedMPNN(hk.Module):
             virtual_node_adj_mat_row = jnp.ones(
                 (adj_mat.shape[0], 1, adj_mat.shape[-1])
             )
-            adj_mat = jnp.concatenate(
-                [adj_mat, virtual_node_adj_mat_row], axis=1
-            )
-            virtual_node_adj_mat_col = jnp.ones(
-                (adj_mat.shape[0], adj_mat.shape[1], 1)
-            )
-            adj_mat = jnp.concatenate(
-                [adj_mat, virtual_node_adj_mat_col], axis=2
-            )
+            adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_row], axis=1)
+            virtual_node_adj_mat_col = jnp.ones((adj_mat.shape[0], adj_mat.shape[1], 1))
+            adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_col], axis=2)
 
         layers = []
 
