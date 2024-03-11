@@ -203,6 +203,7 @@ def validate_model(parameters, mode: ValidationMode):
 @click.option("--disable_edge_updates", type=bool, default=True)
 @click.option("--apply_attention", type=bool, default=False)
 @click.option("--number_of_attention_heads", type=int, default=1)
+@click.option("--seed", type=int, default=42)
 @click.option("--use_wandb", type=bool, default=True)
 def main(
     model_save_name: str | None,
@@ -213,6 +214,7 @@ def main(
     disable_edge_updates: bool,
     apply_attention: bool,
     number_of_attention_heads: int,
+    seed: int,
     use_wandb: bool,
 ) -> None:
     global model, parameters, optimizer, optimizer_state
@@ -247,7 +249,7 @@ def main(
     model = hk.without_apply_rng(hk.transform(model_wrapper))
 
     parameters = model.init(
-        jax.random.PRNGKey(42),
+        jax.random.PRNGKey(seed),
         node_fts=input_node_features,
         edge_fts=input_edge_features,
         graph_fts=input_graph_features,

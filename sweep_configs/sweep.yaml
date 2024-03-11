@@ -48,3 +48,10 @@ parameters:
     distribution: categorical
     values:
       - false
+
+  seed:
+    distribution: categorical
+    values:
+      - 42
+      - 123
+      - 21

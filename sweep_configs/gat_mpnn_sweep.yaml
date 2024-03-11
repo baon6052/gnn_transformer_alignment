@@ -54,3 +54,10 @@ parameters:
     values:
       - 1
       - 3
+
+  seed:
+    distribution: categorical
+    values:
+      - 42
+      - 123
+      - 21
