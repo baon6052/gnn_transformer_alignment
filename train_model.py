@@ -23,14 +23,12 @@ class ValidationMode(Enum):
 
 train_dataloader = dataloader(DatasetPath.TRAIN_PATH)
 (
-    (
-        input_node_features,
-        input_edge_features,
-        input_graph_features,
-        input_adjacency_matrix,
-        input_hidden_node_features,
-        input_hidden_edge_features,
-    ),
+    input_node_features,
+    input_edge_features,
+    input_graph_features,
+    input_adjacency_matrix,
+    input_hidden_node_features,
+    input_hidden_edge_features,
     transformer_node_features_all_layers,
     transformer_edge_embedding,
 ) = next(train_dataloader)
@@ -74,14 +72,12 @@ def model_fn(
 
 def l2_loss_function(parameters, batch):
     (
-        (
-            input_node_fts,
-            input_edge_fts,
-            input_graph_fts,
-            input_adj_mat,
-            input_hidden,
-            input_edge_em,
-        ),
+        input_node_fts,
+        input_edge_fts,
+        input_graph_fts,
+        input_adj_mat,
+        input_hidden,
+        input_edge_em,
         transformer_node_features_all_layers,
         transformer_edge_features_all_layers,
     ) = batch
@@ -103,18 +99,14 @@ def l2_loss_function(parameters, batch):
         transformer_node_features_all_layers,
         strict=True,
     ):
-        loss += jnp.mean(
-            optax.l2_loss(mpnn_node_embedding, transformer_node_embedding)
-        )
+        loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
 
     for mpnn_edge_embedding, transformer_edge_embedding in zip(
         mpnn_edge_features_all_layers,
         transformer_edge_features_all_layers,
         strict=True,
     ):
-        loss += jnp.mean(
-            optax.l2_loss(mpnn_edge_embedding, transformer_edge_embedding)
-        )
+        loss += jnp.mean(optax.l2_loss(mpnn_edge_embedding, transformer_edge_embedding))
 
     return loss
 
@@ -127,9 +119,7 @@ def train_step(parameters, optimizer_state, batch):
     return new_parameters, optimizer_state, loss
 
 
-def train_model(
-    parameters, optimizer_state, use_wandb, checkpointer, epochs=25
-):
+def train_model(parameters, optimizer_state, use_wandb, checkpointer, epochs=25):
     best_validation_loss = float("inf")
 
     for epoch in range(epochs):
@@ -137,11 +127,6 @@ def train_model(
         num_batches = 0
 
         for batch in dataloader(DatasetPath.TRAIN_PATH):
-            inputs, targets = batch[:-1], batch[-1]
-            batch = (
-                *inputs,
-                targets,
-            )
             parameters, optimizer_state, loss = train_step(
                 parameters, optimizer_state, batch
             )
@@ -180,11 +165,6 @@ def validate_model(parameters, mode: ValidationMode):
     )
 
     for batch in dataloader(dataset_path):
-        inputs, targets = batch[:-1], batch[-1]
-        batch = (
-            *inputs,
-            targets,
-        )
         loss += l2_loss_function(parameters, batch)
         num_batches += 1
 
