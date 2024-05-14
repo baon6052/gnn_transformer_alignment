@@ -12,9 +12,6 @@ from checkpointer import Checkpointer
 from dataset import DatasetPath, dataloader
 from models.mpnn import AlignedMPNN
 
-MODEL_DIR = Path(Path.cwd(), "trained_models")
-MODEL_DIR.mkdir(exist_ok=True, parents=True)
-
 
 class ValidationMode(Enum):
     VALIDATION = auto()
@@ -103,18 +100,14 @@ def l2_loss_function(parameters, batch):
         transformer_node_features_all_layers,
         strict=True,
     ):
-        loss += jnp.mean(
-            optax.l2_loss(mpnn_node_embedding, transformer_node_embedding)
-        )
+        loss += jnp.mean(optax.l2_loss(mpnn_node_embedding, transformer_node_embedding))
 
     for mpnn_edge_embedding, transformer_edge_embedding in zip(
         mpnn_edge_features_all_layers,
         transformer_edge_features_all_layers,
         strict=True,
     ):
-        loss += jnp.mean(
-            optax.l2_loss(mpnn_edge_embedding, transformer_edge_embedding)
-        )
+        loss += jnp.mean(optax.l2_loss(mpnn_edge_embedding, transformer_edge_embedding))
 
     return loss
 
@@ -127,9 +120,7 @@ def train_step(parameters, optimizer_state, batch):
     return new_parameters, optimizer_state, loss
 
 
-def train_model(
-    parameters, optimizer_state, use_wandb, checkpointer, epochs=25
-):
+def train_model(parameters, optimizer_state, use_wandb, checkpointer, epochs=25):
     best_validation_loss = float("inf")
 
     for epoch in range(epochs):
@@ -218,6 +209,8 @@ def main(
     use_wandb: bool,
 ) -> None:
     global model, parameters, optimizer, optimizer_state
+    model_dir = Path(Path.cwd(), f"trained_models_seed_{seed}")
+    model_dir.mkdir(exist_ok=True, parents=True)
 
     if model_save_name is None:
         model_save_name = f"vn_{add_virtual_node}_ln_{use_layer_norm}_mid_dim_{mid_dim}_reduction_{reduction}"
@@ -269,7 +262,7 @@ def main(
             group="experiment_2",
         )
 
-    checkpointer = Checkpointer(f"{MODEL_DIR}/{model_save_name}.pkl")
+    checkpointer = Checkpointer(f"{model_dir}/{model_save_name}.pkl")
     parameters = train_model(
         parameters,
         optimizer_state,
