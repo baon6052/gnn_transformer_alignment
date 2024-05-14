@@ -213,14 +213,17 @@ def main(
     model_dir.mkdir(exist_ok=True, parents=True)
 
     if model_save_name is None:
-        model_save_name = f"vn_{add_virtual_node}_ln_{use_layer_norm}_mid_dim_{mid_dim}_reduction_{reduction}"
-
-    reduction_func = jnp.mean
+        if apply_attention:
+            model_save_name = f"vn-{add_virtual_node}-ln-{use_layer_norm}-mid_dim-{mid_dim}-reduction-{reduction}-disable_edge_updates-{disable_edge_updates}-apply_attention-{apply_attention}-number_of_attention_heads-{number_of_attention_heads}"
+        else:
+            model_save_name = f"vn-{add_virtual_node}-ln-{use_layer_norm}-mid_dim-{mid_dim}-reduction-{reduction}-disable_edge_updates-{disable_edge_updates}-apply_attention-{apply_attention}"
 
     if reduction == "sum":
         reduction_func = jnp.sum
-    else:
+    elif reduction == "max":
         reduction_func = jnp.max
+    else:
+        reduction_func = jnp.mean
 
     def model_wrapper(node_fts, edge_fts, graph_fts, adj_mat, hidden, edge_em):
         return model_fn(
