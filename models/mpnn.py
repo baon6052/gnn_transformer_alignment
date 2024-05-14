@@ -17,7 +17,7 @@ class MPNNLayer(hk.Module):
         nb_layers: int,
         out_size: int,
         mid_size: Optional[int] = None,
-        mid_act: Optional[_Fn] = None,
+        mid_act: Optional[_Fn] = jax.nn.relu,
         activation: Optional[_Fn] = jax.nn.relu,
         reduction: _Fn = jnp.mean,
         msgs_mlp_sizes: Optional[List[int]] = None,
@@ -93,7 +93,6 @@ class MPNNLayer(hk.Module):
             a_2 = hk.Linear(self.number_of_attention_heads)
             a_e = hk.Linear(self.number_of_attention_heads)
             a_g = hk.Linear(self.number_of_attention_heads)
-            attention_score_layer = hk.Linear(1)
 
             bias_mat = (adj_mat - 1.0) * 1e9
             bias_mat = jnp.tile(
@@ -110,15 +109,12 @@ class MPNNLayer(hk.Module):
                 jnp.transpose(att_1, (0, 2, 1, 3))
                 + jnp.transpose(att_2, (0, 2, 3, 1))  # + [B, H, N, 1]
                 + jnp.transpose(att_e, (0, 3, 1, 2))  # + [B, H, 1, N]
-                + jnp.expand_dims(  # + [B, H, N, N]
-                    att_g, axis=-1
-                )  # + [B, H, 1, 1]
+                + jnp.expand_dims(att_g, axis=-1)  # + [B, H, N, N]  # + [B, H, 1, 1]
             )  # = [B, H, N, N]
 
             # Calculate coefficients and reduce to a single logit
             logits = jax.nn.leaky_relu(logits) + bias_mat  # [B, H. N. N]
             logits = jnp.transpose(logits, (0, 2, 3, 1))  # [B, N, N, H]
-            logits = attention_score_layer(logits)  # [B, N, N, 1]
             coefs = jax.nn.softmax(logits, axis=-1)  # [B, N, N, 1]
 
             msgs = coefs * msgs
@@ -196,7 +192,7 @@ class AlignedMPNN(hk.Module):
         nb_layers: int,
         out_size: int,
         mid_size: Optional[int] = None,
-        mid_act: Optional[_Fn] = None,
+        mid_act: Optional[_Fn] = jax.nn.relu,
         activation: Optional[_Fn] = jax.nn.relu,
         reduction: _Fn = jnp.mean,
         msgs_mlp_sizes: Optional[List[int]] = None,
@@ -294,15 +290,9 @@ class AlignedMPNN(hk.Module):
             virtual_node_adj_mat_row = jnp.ones(
                 (adj_mat.shape[0], 1, adj_mat.shape[-1])
             )
-            adj_mat = jnp.concatenate(
-                [adj_mat, virtual_node_adj_mat_row], axis=1
-            )
-            virtual_node_adj_mat_col = jnp.ones(
-                (adj_mat.shape[0], adj_mat.shape[1], 1)
-            )
-            adj_mat = jnp.concatenate(
-                [adj_mat, virtual_node_adj_mat_col], axis=2
-            )
+            adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_row], axis=1)
+            virtual_node_adj_mat_col = jnp.ones((adj_mat.shape[0], adj_mat.shape[1], 1))
+            adj_mat = jnp.concatenate([adj_mat, virtual_node_adj_mat_col], axis=2)
 
         layers = []
 
@@ -313,6 +303,7 @@ class AlignedMPNN(hk.Module):
                     out_size=self.out_size,
                     mid_size=self.mid_size,
                     activation=self.activation,
+                    mid_act=self.mid_act,
                     reduction=self.reduction,
                     use_ln=self.use_ln,
                     disable_edge_updates=self.disable_edge_updates,
