@@ -115,6 +115,7 @@ class MPNNLayer(hk.Module):
             # Calculate coefficients and reduce to a single logit
             logits = jax.nn.leaky_relu(logits) + bias_mat  # [B, H. N. N]
             logits = jnp.transpose(logits, (0, 2, 3, 1))  # [B, N, N, H]
+            logits = jnp.mean(logits, axis=-1, keepdims=True)
             coefs = jax.nn.softmax(logits, axis=-1)  # [B, N, N, 1]
 
             msgs = coefs * msgs
